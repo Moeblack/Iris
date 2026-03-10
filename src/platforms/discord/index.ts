@@ -2,15 +2,11 @@
  * Discord 平台适配器
  *
  * 基于 discord.js 官方 SDK。
- *
- * 使用前提：
- *   1. 在 Discord Developer Portal 创建 Bot 并获取 Token
- *   2. 在 Bot 设置页开启 MESSAGE CONTENT Intent
- *   3. 将 Token 填入 config.yaml 的 platform.discord.token
  */
 
 import { Client, GatewayIntentBits, Message, Partials } from 'discord.js';
 import { PlatformAdapter, splitText } from '../base';
+import { Backend } from '../../core/backend';
 import { createLogger } from '../../logger';
 
 const logger = createLogger('Discord');
@@ -24,9 +20,11 @@ export interface DiscordConfig {
 export class DiscordPlatform extends PlatformAdapter {
   private client: Client;
   private token: string;
+  private backend: Backend;
 
-  constructor(config: DiscordConfig) {
+  constructor(backend: Backend, config: DiscordConfig) {
     super();
+    this.backend = backend;
     this.token = config.token;
     this.client = new Client({
       intents: [
@@ -35,12 +33,24 @@ export class DiscordPlatform extends PlatformAdapter {
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.MessageContent,
       ],
-      partials: [Partials.Channel],  // 支持私信
+      partials: [Partials.Channel],
     });
   }
 
   async start(): Promise<void> {
-    this.client.on('ready', ()=> {
+    // 监听 Backend 事件
+    this.backend.on('response', (sid: string, text: string) => {
+      this.sendToChannel(sid, text);
+    });
+
+this.backend.on('stream:start', () => {});
+    this.backend.on('stream:chunk', () => {});
+    this.backend.on('stream:end', (sid: string) => {
+      // Discord 不支持流式，等全部结束后发送 —— 但流式文本已在 Backend 中累积，
+      // Backend 会在非流式模式下触发 response 事件，所以这里不需要处理。
+    });
+
+    this.client.on('ready', () => {
       logger.info(`已连接 | Bot: ${this.client.user?.tag}`);
     });
 
@@ -53,9 +63,11 @@ export class DiscordPlatform extends PlatformAdapter {
   async stop(): Promise<void> {
     await this.client.destroy();
     logger.info('平台已停止');
- }
+  }
 
-  async sendMessage(sessionId: string, text: string): Promise<void> {
+  // ============ 内部方法 ============
+
+  private async sendToChannel(sessionId: string, text: string): Promise<void> {
     const channelId = sessionId.replace('discord-', '');
     const channel = await this.client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return;
@@ -66,8 +78,6 @@ export class DiscordPlatform extends PlatformAdapter {
     }
   }
 
-  // ============ 内部方法 ============
-
   private async handleMessage(msg: Message): Promise<void> {
     if (msg.author.bot) return;
     if (!msg.content) return;
@@ -77,7 +87,6 @@ export class DiscordPlatform extends PlatformAdapter {
 
     if (!isDM && !isMentioned) return;
 
-    // Strip bot mention from content
     let content = msg.content;
     if (isMentioned && this.client.user) {
       content = content.replace(new RegExp(`<@!?${this.client.user.id}>`, 'g'), '').trim();
@@ -85,17 +94,10 @@ export class DiscordPlatform extends PlatformAdapter {
     if (!content) return;
 
     const sessionId = `discord-${msg.channelId}`;
-    if (this.messageHandler) {
-      try {
-        await this.messageHandler({
-          sessionId,
-          parts: [{ text: content }],
-          platformContext: msg,
-        });
-      } catch (err) {
-        logger.error('处理消息时出错:', err);
-      }
+    try {
+      await this.backend.chat(sessionId, content);
+    } catch (err) {
+      logger.error('处理消息时出错:', err);
     }
   }
 }
-

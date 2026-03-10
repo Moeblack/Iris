@@ -6,7 +6,7 @@
 
 import { loadConfig, findConfigFile } from './config';
 
-// 平台
+//平台
 import { PlatformAdapter } from './platforms/base';
 import { ConsolePlatform } from './platforms/console';
 import { DiscordPlatform } from './platforms/discord';
@@ -38,21 +38,20 @@ import { applyDiff } from './tools/internal/apply-diff';
 // 子代理
 import { SubAgentTypeRegistry, createDefaultSubAgentTypes, buildSubAgentGuidance, createSubAgentTool } from './tools/internal/sub-agent';
 
-
 // 模式
-import { ModeRegistry } from './modes';
+import { ModeRegistry, DEFAULT_MODE, DEFAULT_MODE_NAME } from './modes';
 
 // 提示词
 import { PromptAssembler } from './prompt/assembler';
 import { DEFAULT_SYSTEM_PROMPT } from './prompt/templates/default';
 
 // 核心
-import { Orchestrator } from './core/orchestrator';
+import { Backend } from './core/backend';
 
 async function main() {
   const config = loadConfig();
 
-  // ---- 1. 创建 LLM 路由器（三层） ----
+  // ---- 1. 创建 LLM 路由器 ----
   const router = createLLMRouter(config.llm);
 
   // ---- 2. 创建存储 ----
@@ -80,7 +79,7 @@ async function main() {
     tools.registerAll(createMemoryTools(memory));
   }
 
-  // ---- 3.1 连接 MCP 服务器（后台异步，不阻塞启动） ----
+  // ---- 3.1 连接 MCP 服务器 ----
   let mcpManager: MCPManager | undefined;
   if (config.mcp) {
     mcpManager = createMCPManager(config.mcp);
@@ -92,72 +91,30 @@ async function main() {
   // ---- 3.5 注册子 Agent 工具 ----
   const subAgentTypes = new SubAgentTypeRegistry();
   for (const t of createDefaultSubAgentTypes()) {
-    // recall 类型仅在记忆模块启用时注册
     if (t.name === 'recall' && !memory) continue;
     subAgentTypes.register(t);
   }
 
   // ---- 3.5 注册用户自定义模式 ----
   const modeRegistry = new ModeRegistry();
+  modeRegistry.register(DEFAULT_MODE);
   if (config.modes) {
     modeRegistry.registerAll(config.modes);
   }
-  const defaultMode = config.system.defaultMode;
-
-  // orchestrator 在后面创建，但闭包在运行时才求值，此时已完成初始化
-  let orchestrator: Orchestrator;
+  const defaultMode = config.system.defaultMode ?? DEFAULT_MODE_NAME;
 
   // ---- 3.5a. 创建工具状态管理器 ----
   const toolState = new ToolStateManager();
-  tools.register(createSubAgentTool({
-    getRouter: () => orchestrator.getRouter(),
-    tools,
-    subAgentTypes,
-    maxDepth: config.system.maxAgentDepth,
-  }));
 
-  // ---- 3.6 构建子代理协调指导 ----
-  const agentGuidance = buildSubAgentGuidance(subAgentTypes, !!memory);
-
-
-  // ---- 4. 创建平台适配器 ----
-  let platform: PlatformAdapter;
-  switch (config.platform.type) {
-    case 'discord':
-      platform = new DiscordPlatform({ token: config.platform.discord.token });
-      break;
-    case 'telegram':
-      platform = new TelegramPlatform({ token: config.platform.telegram.token });
-      break;
-    case 'web':
-      platform = new WebPlatform({
-        port: config.platform.web.port,
-        host: config.platform.web.host,
-        authToken: config.platform.web.authToken,
-        managementToken: config.platform.web.managementToken,
-        storage,
-        tools,
-        configPath: findConfigFile(),
-        llmName: config.llm.primary.provider,
-        modelName: config.llm.primary.model,
-        streamEnabled: config.system.stream,
-      });
-      break;
-    case 'console':
-    default:
-      platform = new ConsolePlatform();
-      break;
-  }
-
-  // ---- 5. 配置提示词 ----
+  // ---- 4. 配置提示词 ----
   const prompt = new PromptAssembler();
   prompt.setSystemPrompt(config.system.systemPrompt || DEFAULT_SYSTEM_PROMPT);
 
-  // ---- 6. 创建并启动协调器 ----
-  // agents+memory 同时激活时关闭自动召回，由 recall agent 代替
+  // ---- 5. 创建 Backend ----
+  const agentGuidance = buildSubAgentGuidance(subAgentTypes, !!memory);
   const autoRecall = !(memory && tools.get('agent'));
 
-  orchestrator = new Orchestrator(platform, router, storage, tools, toolState, prompt, {
+  const backend = new Backend(router, storage, tools, toolState, prompt, {
     maxToolRounds: config.system.maxToolRounds,
     stream: config.system.stream,
     autoRecall,
@@ -165,24 +122,56 @@ async function main() {
     defaultMode,
   }, memory, modeRegistry);
 
-  // 注入 Orchestrator 和 MCP 管理器到 WebPlatform（支持配置热重载）
-  if (platform instanceof WebPlatform) {
-    platform.setOrchestrator(orchestrator);
-    if (mcpManager) platform.setMCPManager(mcpManager);
+  // 注册子代理工具（需要 backend 引用）
+  tools.register(createSubAgentTool({
+    getRouter: () => backend.getRouter(),
+    tools,
+    subAgentTypes,
+    maxDepth: config.system.maxAgentDepth,
+  }));
+
+  // ---- 6. 创建平台适配器 ----
+  let platform: PlatformAdapter;
+  switch (config.platform.type) {
+    case 'discord':
+      platform = new DiscordPlatform(backend, { token: config.platform.discord.token });
+      break;
+    case 'telegram':
+      platform = new TelegramPlatform(backend, { token: config.platform.telegram.token });
+      break;
+    case 'web': {
+      const webPlatform = new WebPlatform(backend, {
+        port: config.platform.web.port,
+        host: config.platform.web.host,
+        authToken: config.platform.web.authToken,
+        managementToken: config.platform.web.managementToken,
+        configPath: findConfigFile(),
+        llmName: config.llm.primary.provider,
+        modelName: config.llm.primary.model,
+        streamEnabled: config.system.stream,
+      });
+      if (mcpManager) webPlatform.setMCPManager(mcpManager);
+      platform = webPlatform;
+      break;
+    }
+    case 'console':
+    default:
+      platform = new ConsolePlatform(backend, defaultMode);
+      break;
   }
 
-  await orchestrator.start();
+  // ---- 7. 启动平台 ----
+  await platform.start();
 
-  // ---- 退出清理（防重入） ----
+  // ---- 退出清理 ----
   let cleaning = false;
   const cleanup = async () => {
     if (cleaning) return;
     cleaning = true;
     try {
-      // WebPlatform 热重载可能创建了新的 MCPManager，取最新引用
       const activeMcp = (platform instanceof WebPlatform) ? platform.getMCPManager() : mcpManager;
       if (activeMcp) await activeMcp.disconnectAll();
-      await orchestrator.stop();
+      await platform.stop();
     } catch (err) {
       console.error('清理时出错:', err);
     }

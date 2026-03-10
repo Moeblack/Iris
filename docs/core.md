@@ -1,135 +1,257 @@
-# 核心协调器模块
+# Backend 核心服务
 
 ## 职责
 
-串联所有模块，编排完整的消息处理流程。本身不包含业务逻辑。
+`Backend` 是整个应用的核心服务层，封装全部业务逻辑。
 
-## 文件结构
+它通过**公共方法**接收平台层的调用，通过**事件**将结果推送给平台层。Backend 不知道任何平台的存在，不持有任何平台引用。
+
+##文件结构
 
 ```
 src/core/
-├── orchestrator.ts      Orchestrator 主协调器
-├── agent-types.ts       AgentTypeRegistry 子 Agent 类型注册
-└── agent-executor.ts    AgentExecutor 子 Agent 执行器
+├── backend.ts       Backend 核心服务
+└── tool-loop.ts     ToolLoop 工具循环（纯计算，无 I/O）
 ```
 
-## Orchestrator 接口
+## 架构位置
 
-### 构造参数
+```
+Platform ──调方法──▶ Backend ──发事件──▶ Platform
+                       │
+                       ├──▶ Storage     存储
+                       ├──▶ LLMRouter   LLM 调用
+                       ├──▶ ToolLoop    工具循环
+                       ├──▶ Memory      记忆（可选）
+                       └──▶ ModeRegistry 模式
+```
+
+平台层与 Backend 的关系是**单向依赖**：平台知道 Backend，Backend 不知道平台。
+
+---
+
+## 构造参数
 
 ```typescript
-new Orchestrator(
-  platform: PlatformAdapter,    // 用户交互层
-  router: LLMRouter,            // LLM 三层路由器
-  storage: StorageProvider,      // 存储层
-  tools: ToolRegistry,          // 工具注册中心
-  prompt: PromptAssembler,      // 提示词组装器
-  config?: OrchestratorConfig,  // { maxToolRounds, stream, autoRecall, agentGuidance }
-  memory?: MemoryProvider,      // 记忆层（可选）
+new Backend(
+  router: LLMRouter,           // LLM 三层路由器
+  storage: StorageProvider,    // 存储层
+  tools: ToolRegistry,         // 工具注册中心
+  toolState: ToolStateManager, // 工具状态管理器
+  prompt: PromptAssembler,     // 提示词组装器
+  config?: BackendConfig,      // 配置
+  memory?: MemoryProvider,     // 记忆层（可选）
+  modeRegistry?: ModeRegistry, // 模式注册表（可选）
 )
 ```
 
-### 方法
+### BackendConfig
 
-| 方法 | 说明 |
-|------|------|
-| `start()` | 注册 `onMessage` + `onClear` 回调并启动平台 |
-| `stop()` | 停止平台 |
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `maxToolRounds` | `number` | `10` | 工具执行最大轮次 |
+| `stream` | `boolean` | `false` | 是否启用流式输出 |
+| `autoRecall` | `boolean` | `true` | 是否自动召回记忆 |
+| `agentGuidance` | `string` | — | Agent 协调指导文本 |
+| `defaultMode` | `string` | — | 默认模式名称 |
 
-### 内部流程（handleMessage）
+---
+
+## 公共方法
+
+平台层通过这些方法与 Backend 交互。
+
+### 对话
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `chat` | `(sessionId: string, text: string) => Promise<void>` | 发送消息，触发完整的 LLM + 工具循环。结果通过事件推送。 |
+
+### 会话管理
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `clearSession` | `(sessionId: string) => Promise<void>` | 清空指定会话（历史 + 元数据） |
+| `getHistory` | `(sessionId: string) => Promise<Content[]>` | 获取会话历史消息 |
+| `getMeta` | `(sessionId: string) => Promise<SessionMeta \| null>` | 获取会话元数据 |
+| `listSessionMetas` | `() => Promise<SessionMeta[]>` | 列出所有会话元数据（按更新时间降序） |
+| `listSessions` | `() => Promise<string[]>` | 列出所有会话 ID |
+| `truncateHistory` | `(sessionId: string, keepCount: number) => Promise<void>` | 截断历史，只保留前 N 条 |
+
+### 内部引用
+
+供特殊场景使用（如 Web 平台的热重载、状态查询）。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `getToolNames` | `() => string[]` | 获取所有工具名称列表 |
+| `getTools` | `() => ToolRegistry` | 获取工具注册表引用 |
+| `getStorage` | `() => StorageProvider` | 获取存储引用 |
+| `getRouter` | `() => LLMRouter` | 获取 LLM 路由器引用 |
+| `getToolState` | `() => ToolStateManager` | 获取工具状态管理器 |
+| `isStreamEnabled` | `() => boolean` | 获取当前流式设置 |
+
+### 热重载
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `reloadLLM` | `(newRouter: LLMRouter) => void` | 替换 LLM 路由器 |
+| `reloadConfig` | `(opts) => void` | 更新 stream / maxToolRounds / systemPrompt |
+
+---
+
+## 事件
+
+Backend 继承自 `EventEmitter`，平台层通过监听事件接收结果。
+
+所有事件的第一个参数都是 `sessionId`，平台据此判断是否属于自己关心的会话。
+
+| 事件 | 参数 | 触发时机 |
+|------|------|----------|
+| `response` | `(sessionId, text)` | 非流式模式下，LLM 最终回复完成 |
+| `stream:start` | `(sessionId)` | 流式段开始（一次 chat 可能有多段，因为工具循环中每次 LLM 调用都是一段） |
+| `stream:chunk` | `(sessionId, chunk)` | 流式文本块到达 |
+| `stream:end` | `(sessionId)` | 流式段结束 |
+| `tool:update` | `(sessionId, invocations[])` | 工具状态变更（创建、执行中、完成等） |
+| `error` | `(sessionId, errorMessage)` | 消息处理过程中出错 |
+
+### 事件时序示例
+
+**非流式模式：**
+```
+chat() 调用
+  → tool:update (工具创建)
+  → tool:update (工具执行中)
+  → tool:update (工具完成)
+  → response (最终文本)
+```
+
+**流式模式：**
+```
+chat() 调用
+  → stream:start
+  → stream:chunk × N
+  → stream:end
+  → tool:update (工具创建)
+  → tool:update (工具完成)
+  → stream:start    ← 第二轮 LLM 调用
+  → stream:chunk × N
+  → stream:end
+```
+
+---
+
+## 内部流程
+
+`chat()` 调用后的完整处理流程：
 
 ```
-1. 收到用户消息 (sessionId + Part[])
-2. 存储用户消息 → storage.addMessage()
-3. 查询相关记忆 → memory.buildContext(userText) → extraParts（可选）
-4. 进入循环（最多 maxToolRounds 轮）：
-   a. storage.getHistory() 获取历史
-   b. prompt.assemble(history, toolDecls, undefined, extraParts) 组装请求
-   c. 调用 LLM：
-      - 流式：callLLMStream() → 边接收边输出文本 + 累积完整 Content
-      - 非流式：llm.chat() → 获取完整响应
-   d. storage.addMessage() 存储模型回复
-   e. 检查 functionCall：
-      - 有：执行工具 → 存储结果（role:'user'）→ 继续循环
-      - 无：发送文本给用户 → 结束
+1. 设置 activeSessionId（用于工具事件转发）
+2. storage.getHistory() 加载历史
+3. 追加用户消息到历史
+4. 构建额外上下文：
+   - 记忆自动召回（autoRecall=true 时）
+   - Agent 协调指导文本
+   - 模式提示词覆盖
+5. 构建 LLM 调用函数（注入流式/非流式行为）
+6. 执行 ToolLoop.run()（可能多轮）
+7. 持久化新增消息到存储
+8. 更新会话元数据（新会话创建 meta，旧会话更新时间和工作目录）
+9. 非流式模式：emit('response', sessionId, text)
+10. 清除 activeSessionId
 ```
 
-### 流式调用（callLLMStream）
+### 流式调用
 
 ```
-llm.chatStream(request) → AsyncGenerator<LLMStreamChunk>
+router.chatStream(request) → AsyncGenerator<LLMStreamChunk>
   │
-  ├─→ 提取 textDelta → 包装为 AsyncIterable<string> → platform.sendMessageStream()
-  ├─→ 收集 functionCalls
-  ├─→ 收集 usageMetadata
-  ├─→ 收集 thoughtSignature（Gemini 思考签名）
+  ├── emit('stream:start')
+  ├── 遍历 chunk：
+  │   ├── textDelta → emit('stream:chunk') + 累积 fullText
+  │   ├── functionCalls → 收集
+  │   ├── usageMetadata → 收集
+  │   └── thoughtSignature → 收集
+  ├── emit('stream:end')
   │
-  ▼
-累积为完整 Content { role:'model', parts }
-  - thoughtSignature 附加到 text part 和 function call parts 上
+  └── 组装完整 Content { role:'model', parts }
 ```
 
-### onClear 回调
+### 工具事件转发
 
-平台触发清空会话时（如用户发送 `/clear`），Orchestrator 调用 `storage.clearHistory(sessionId)` 清空历史。
+`ToolStateManager` 的 `created` 和 `stateChange` 事件被转发为 Backend 的 `tool:update` 事件，附带当前 `activeSessionId`。
 
-### 热重载方法
+### 会话元数据
 
-| 方法 | 说明 |
+| 场景 | 行为 |
 |------|------|
-| `reloadLLM(router)` | 替换 LLM 路由器（原子赋值） |
-| `reloadConfig(opts)` | 更新 stream、maxToolRounds、systemPrompt |
-| `getRouter()` | 获取当前路由器引用（供 Agent 工具使用） |
+| 新会话（历史为空） | 用用户首条消息前 100 字作为标题，记录当前工作目录，创建元数据 |
+| 旧会话 | 更新 `updatedAt`；若当前工作目录与记录不同，同步更新 `cwd` |
+
+---
+
+## ToolLoop
+
+工具循环的纯计算核心，不包含任何 I/O。
+
+```typescript
+class ToolLoop {
+  async run(
+    history: Content[],       // 对话历史（原地修改）
+    callLLM: LLMCaller,       // 注入的 LLM 调用函数
+    options?: ToolLoopRunOptions,
+  ): Promise<ToolLoopResult>
+}
+```
+
+循环逻辑：
+1. 组装 LLM 请求 → 调用 LLM
+2. 检查返回的 functionCall
+3. 有工具调用 → 执行工具 → 追加结果到历史 → 继续循环
+4. 无工具调用 → 返回最终文本
+5. 超过 `maxRounds` → 中断并返回提示
 
 ---
 
 ## 子 Agent 系统
 
-### AgentTypeRegistry（`agent-types.ts`）
+### SubAgentTypeRegistry
 
-管理可用的 Agent 类型定义。每种类型包含：
+管理可用的子 Agent 类型。每种类型包含：
 
 ```typescript
-interface AgentType {
+interface SubAgentType {
   name: string;              // 类型标识
   description: string;       // 供 LLM 选择时参考
   systemPrompt: string;      // 子 Agent 的系统提示词
-  tier: 'primary' | 'secondary' | 'light';  // 使用的 LLM 层级
+  tier: LLMTier;             // 使用的 LLM 层级
   maxToolRounds: number;     // 最大工具轮次
-  allowedTools?: string[];   // 白名单（仅这些工具可用）
-  excludedTools?: string[];  // 黑名单（排除这些工具）
+  allowedTools?: string[];   // 工具白名单
+  excludedTools?: string[];  // 工具黑名单
 }
 ```
 
-**默认 Agent 类型（`createDefaultAgentTypes()`）：**
+**默认类型：**
 
 | 类型 | 层级 | 轮次 | 工具过滤 | 用途 |
 |------|------|------|----------|------|
-| `general-purpose` | secondary | 10 | 黑名单（排除 agent） | 多步骤通用任务 |
-| `explore` | light | 20 | 白名单（read_file、terminal） | 只读文件/终端探索 |
-| `recall` | light | 3 | 白名单（memory_search） | 记忆搜索（仅记忆启用时注册） |
-
-### AgentExecutor（`agent-executor.ts`）
-
-轻量级编排器，为子 Agent 创建独立执行环境：
-
-- **无平台适配器**：不直接输出给用户
-- **无持久化存储**：使用内存中的历史记录
-- **无流式输出**：同步收集完整响应
-- **无记忆注入**：不自动搜索记忆上下文
-- **独立工具集**：通过 `ToolRegistry.createFiltered()` 按 Agent 类型过滤
+| `general-purpose` | secondary | 10 | 排除 agent | 多步骤通用任务 |
+| `explore` | light | 20 | 仅 read_file、terminal | 只读探索 |
+| `recall` | light | 3 | 仅 memory_search | 记忆搜索 |
 
 ### agentGuidance
 
-`buildAgentGuidance()` 根据已注册的 Agent 类型生成指导文本，注入到主 Orchestrator 的系统提示词中，教导 LLM 何时以及如何使用 `agent` 工具委派子任务。
+根据已注册的 Agent 类型生成指导文本，注入系统提示词，指导 LLM 使用 `agent` 工具。
 
 ### autoRecall
 
-当记忆模块和 Agent 系统同时启用时，`autoRecall` 设为 `false`，禁用 Orchestrator 的自动记忆搜索，改由 `recall` 类型的子 Agent 按需搜索。
+当记忆模块和 Agent 系统同时启用时，`autoRecall` 设为 `false`，由 `recall` 子 Agent按需搜索。
 
 ---
 
 ## 修改指南
 
-- 如需增加消息预处理/后处理钩子，可在循环前后插入
-- 新增 Agent 类型：在 `createDefaultAgentTypes()` 中添加，指定系统提示词和工具过滤规则
+- 新增公共 API：在 Backend 类中添加公共方法，更新本文档
+- 新增事件：在 `BackendEvents` 接口中声明，在对应位置 `emit`，更新本文档
+- 新增 Agent 类型：在 `createDefaultSubAgentTypes()` 中添加
+- 消息预处理/后处理：在 `handleMessage` 的对应步骤前后插入

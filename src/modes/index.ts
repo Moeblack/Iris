@@ -4,6 +4,7 @@
 
 export type { ModeDefinition, ToolFilter } from './types';
 export { ModeRegistry } from './registry';
+export { DEFAULT_MODE, DEFAULT_MODE_NAME } from './defaults';
 
 import { ModeDefinition } from './types';
 import { ToolRegistry } from '../tools/registry';

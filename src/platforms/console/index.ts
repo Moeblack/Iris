@@ -1,51 +1,90 @@
 /**
  * Console 平台适配器 (Ink 5+ / React 18)
  *
- * 通过现代化的 TUI 渲染终端界面。
+ * 通过 Backend 事件驱动 TUI 界面。
  */
 
 import React from 'react';
 import { render, Instance } from 'ink';
 import { PlatformAdapter } from '../base';
-import { ToolStateManager } from '../../tools/state';
+import { Backend } from '../../core/backend';
+import { SessionMeta } from '../../storage/base';
+import { ToolInvocation } from '../../types';
 import { setGlobalLogLevel, LogLevel } from '../../logger/index';
 import { App, AppHandle } from './App';
 
+/** 生成基于时间戳的会话 ID */
+function generateSessionId(): string {
+  const now = new Date();
+  const ts = now.getFullYear().toString()
+    + String(now.getMonth() + 1).padStart(2, '0')
+    + String(now.getDate()).padStart(2, '0')
+    + '_'
+    + String(now.getHours()).padStart(2, '0')
+    + String(now.getMinutes()).padStart(2, '0')
+    + String(now.getSeconds()).padStart(2, '0');
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${ts}_${rand}`;
+}
+
 export class ConsolePlatform extends PlatformAdapter {
   private sessionId: string;
+  private modeName?: string;
+  private backend: Backend;
   private inkInstance?: Instance;
   private appHandle?: AppHandle;
-  private toolStateManager?: ToolStateManager;
 
   /** 当前响应周期内的工具调用 ID 集合 */
   private currentToolIds = new Set<string>();
 
-  constructor(sessionId: string = 'console-default') {
+  constructor(backend: Backend, modeName?: string) {
     super();
-    this.sessionId = sessionId;
-  }
-
-  // ============ 平台接口 ============
-
-  /** 接收工具状态管理器，监听事件以同步 UI */
-  override setToolStateManager(manager: ToolStateManager): void {
-    this.toolStateManager = manager;
-
-    manager.on('created', (invocation) => {
-      this.currentToolIds.add(invocation.id);
-      this.syncToolDisplay();
-    });
-
-    manager.on('stateChange', () => {
-      this.syncToolDisplay();
-    });
+    this.backend = backend;
+    this.sessionId = generateSessionId();
+    this.modeName = modeName;
   }
 
   override async start(): Promise<void> {
-    // 屏蔽全局日志输出，避免干扰 TUI 渲染
     setGlobalLogLevel(LogLevel.SILENT);
 
-    // 渲染根组件
+    // 监听 Backend 事件
+    this.backend.on('response', (sid: string, text: string) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.addMessage('assistant', text);
+      }
+    });
+
+    this.backend.on('stream:start', (sid: string) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.startStream();
+      }
+    });
+
+    this.backend.on('stream:chunk', (sid: string, chunk: string) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.pushStreamChunk(chunk);
+      }
+    });
+
+    this.backend.on('stream:end', (sid: string) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.endStream();
+      }
+    });
+
+    this.backend.on('tool:update', (sid: string, invocations: ToolInvocation[]) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.setToolInvocations(invocations);
+      }
+    });
+
+    this.backend.on('error', (sid: string, error: string) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.addMessage('assistant', `!! CRITICAL_ERROR: ${error}`);
+      }
+    });
+
+    // 渲染 TUI
     return new Promise<void>((resolve) => {
       const element = React.createElement(App, {
         onReady: (handle: AppHandle) => {
@@ -53,14 +92,17 @@ export class ConsolePlatform extends PlatformAdapter {
           resolve();
         },
         onSubmit: (text: string) => this.handleInput(text),
+        onNewSession: () => this.handleNewSession(),
+        onLoadSession: (id: string) => this.handleLoadSession(id),
+        onListSessions: () => this.handleListSessions(),
         onExit: () => this.stop(),
+        modeName: this.modeName,
       });
-      // 捕获不可用的 TTY
       try {
         this.inkInstance = render(element);
       } catch (err: unknown) {
         if (err instanceof Error && err.message?.includes('Raw mode is not supported')) {
-          console.error('[ConsolePlatform] Fatal: 当前终端不支持 Raw mode。请尝试在原生命令行 (如 CMD, PowerShell, iTerm) 而非内嵌面板中运行。');
+          console.error('[ConsolePlatform] Fatal: 当前终端不支持 Raw mode。');
           process.exit(1);
         } else {
           throw err;
@@ -68,57 +110,50 @@ export class ConsolePlatform extends PlatformAdapter {
       }
     });
   }
+
   override async stop(): Promise<void> {
     this.inkInstance?.unmount();
     process.exit(0);
   }
 
-  /** 非流式发送消息 */
-  override async sendMessage(_sessionId: string, text: string): Promise<void> {
-    this.appHandle?.addMessage('assistant', text);
-  }
-
-  /** 流式发送消息 */
-  override async sendMessageStream(_sessionId: string, stream: AsyncIterable<string>): Promise<void> {
-    this.appHandle?.startStream();
-    for await (const chunk of stream) {
-      this.appHandle?.pushStreamChunk(chunk);
-    }
-    this.appHandle?.endStream();
-  }
-
   // ============ 内部逻辑 ============
 
-  private async handleInput(text: string): Promise<void> {
-    if (!this.messageHandler) return;
+  private handleNewSession(): void {
+    this.sessionId = generateSessionId();
+    this.currentToolIds.clear();
+  }
 
-    // 状态更新：显示用户消息，进入生成状态
+  private async handleLoadSession(id: string): Promise<void> {
+    this.sessionId = id;
+    this.currentToolIds.clear();
+
+    const history = await this.backend.getHistory(id);
+    for (const msg of history) {
+      const role = msg.role === 'user' ? 'user' : 'assistant';
+      const text = msg.parts
+        ?.filter((p: any) => p.text)
+        .map((p: any) => p.text)
+        .join('') || '';
+      if (text) {
+        this.appHandle?.addMessage(role as 'user' | 'assistant', text);
+      }
+    }
+  }
+
+  private async handleListSessions(): Promise<SessionMeta[]> {
+    return this.backend.listSessionMetas();
+  }
+
+  private async handleInput(text: string): Promise<void> {
     this.appHandle?.addMessage('user', text);
     this.appHandle?.setGenerating(true);
-
-    // 清空上一轮工具 ID（工具已在上轮结束时快照）
     this.currentToolIds.clear();
 
     try {
-      await this.messageHandler({
-        sessionId: this.sessionId,
-        parts: [{ text }],
-      });
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.appHandle?.addMessage('assistant', `!! CRITICAL_ERROR: ${errorMsg}`);
+      await this.backend.chat(this.sessionId, text);
     } finally {
-      // 当前轮结束，将工具快照到最后一条 assistant 消息
       this.appHandle?.commitTools();
       this.appHandle?.setGenerating(false);
     }
-  }
-
-  private syncToolDisplay(): void {
-    if (!this.toolStateManager || !this.appHandle) return;
- const invocations = this.toolStateManager
-      .getAll()
-      .filter(inv => this.currentToolIds.has(inv.id));
-    this.appHandle.setToolInvocations(invocations);
   }
 }

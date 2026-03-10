@@ -1,18 +1,18 @@
 /**
  * TUI 根组件
  *
- * 已完成的消息用 <Static> 固化���出，只有当前活动区域动态刷新。
- * ChatMessage.parts 对应 Gemini 的 parts 顺序：text → tool_use → text → ...
+ * 已完成的消息用 <Static> 固化输出，只有当前活动区域动态刷新。
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, Static, useInput, useStdout } from 'ink';
 import Gradient from 'ink-gradient';
 import { ToolInvocation } from '../../types';
+import { SessionMeta } from '../../storage/base';
 import { MessageItem, ChatMessage, MessagePart } from './components/MessageItem';
 import { InputBar } from './components/InputBar';
 
-let _msgIdCounter = 0;
+let _msgIdCounter =0;
 function nextMsgId() {
   return `msg-${++_msgIdCounter}`;
 }
@@ -31,18 +31,28 @@ export interface AppHandle {
 interface AppProps {
   onReady: (handle: AppHandle) => void;
   onSubmit: (text: string) => void;
+  onNewSession: () => void;
+  onLoadSession: (id: string) => Promise<void>;
+  onListSessions: () => Promise<SessionMeta[]>;
   onExit: () => void;
+  modeName?: string;
 }
 
-export function App({ onReady, onSubmit, onExit }: AppProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+/** 视图模式 */
+type ViewMode = 'chat' | 'session-list';
+
+export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSessions, onExit, modeName }: AppProps) {
+  const [messages, setMessages] =useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolInvocations, setToolInvocations] = useState<ToolInvocation[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('chat');
+  const [sessionList, setSessionList] = useState<SessionMeta[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const { stdout } = useStdout();
 
- const streamRef = useRef('');
+  const streamRef = useRef('');
   const toolInvocationsRef = useRef<ToolInvocation[]>([]);
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -50,7 +60,6 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
     const handle: AppHandle = {
       addMessage(role, content) {
         setMessages(prev => {
-          // 同一���连续的 assistant 消息合并
           if (role === 'assistant' && prev.length > 0 && prev[prev.length - 1].role === 'assistant') {
             const copy = [...prev];
             const last = copy[copy.length - 1];
@@ -69,7 +78,6 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
       },
 
       startStream() {
-        // 未提交的工具先 commit，确保 tool_use part 在新 text 之前
         if (toolInvocationsRef.current.length > 0) {
           handle.commitTools();
         }
@@ -80,7 +88,6 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
 
       pushStreamChunk(chunk) {
         streamRef.current += chunk;
-        // 节流 60ms
         if (!throttleTimerRef.current) {
           throttleTimerRef.current = setTimeout(() => {
             throttleTimerRef.current = null;
@@ -157,20 +164,51 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
     onReady(handle);
   }, [onReady]);
 
+  // ============ 命令处理 ============
+
   const handleSubmit = useCallback((text: string) => {
-    if (text === '/quit' || text === '/exit') {
+    if (text === '/exit') {
       onExit();
       return;
     }
-    if (text === '/clear') {
+    if (text === '/new') {
       setMessages([]);
       setToolInvocations([]);
+      onNewSession();
+      return;
+    }
+    if (text === '/load') {
+      onListSessions().then(metas => {
+        setSessionList(metas);
+        setSelectedIndex(0);
+        setViewMode('session-list');
+      });
       return;
     }
     onSubmit(text);
-  }, [onSubmit, onExit]);
+  }, [onSubmit, onNewSession, onListSessions, onExit]);
+
+  // ============ 键盘输入 ============
 
   useInput((input, key) => {
+    if (viewMode === 'session-list') {
+      if (key.upArrow) {
+        setSelectedIndex(prev => Math.max(0, prev - 1));
+      } else if (key.downArrow) {
+        setSelectedIndex(prev => Math.min(sessionList.length - 1, prev + 1));
+      } else if (key.return) {
+        const selected =sessionList[selectedIndex];
+        if (selected) {
+          setMessages([]);
+          setToolInvocations([]);
+          setViewMode('chat');
+          onLoadSession(selected.id);
+        }
+      } else if (key.escape) {
+        setViewMode('chat');
+      }
+      return;
+    }
     if (key.escape) {
       onExit();
     }
@@ -178,10 +216,53 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
 
   const termWidth = stdout?.columns ?? 80;
 
-  // 分离消息：已完成 → Static，活动的 → 动态渲染
+  // ============ 会话列表视图 ============
+
+  if (viewMode === 'session-list') {
+    return (
+      <Box flexDirection="column" width="100%">
+        <Box marginBottom={1}>
+          <Gradient name="atlas">
+            <Text bold italic>IRIS</Text>
+          </Gradient>
+        </Box>
+        <Box marginBottom={1}>
+          <Text bold>历史对话</Text>
+          <Text dimColor>  (↑↓ 选择, Enter 加载, Esc 返回)</Text>
+        </Box>
+        {sessionList.length === 0 && (
+          <Text dimColor>  暂无历史对话</Text>
+        )}
+        {sessionList.map((meta, i) => {
+          const isSelected = i === selectedIndex;
+          const time = new Date(meta.updatedAt).toLocaleString('zh-CN');
+          return (
+            <Box key={meta.id} paddingLeft={1}>
+              <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                {isSelected ? '❯ ' : '  '}
+              </Text>
+              <Text color={isSelected ? 'cyan' : 'white'} bold={isSelected}>
+                {meta.title.slice(0, 40)}
+              </Text>
+              <Text dimColor>  {meta.cwd}</Text>
+              <Text dimColor>  {time}</Text>
+            </Box>
+          );
+        })}
+        <Box marginTop={1}>
+   <Text wrap="truncate-end">
+            <Text dimColor>{'\u2500'.repeat(Math.max(3, termWidth - 6))}</Text>
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // ============ 对话视图 ============
+
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   const lastIsActiveAssistant = isGenerating && lastMsg?.role === 'assistant';
-  const staticMessages = lastIsActiveAssistant ? messages.slice(0, -1) : messages;
+  const staticMessages = lastIsActiveAssistant ? messages.slice(0,-1) : messages;
   const activeMessage = lastIsActiveAssistant ? lastMsg : null;
 
   type StaticItem =
@@ -207,7 +288,7 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
               </Box>
             );
           }
-          return (<Box key={item.id} marginBottom={1}>
+       return (<Box key={item.id} marginBottom={1}>
             <MessageItem msg={item.msg} />
           </Box>);
         }}
@@ -238,7 +319,7 @@ export function App({ onReady, onSubmit, onExit }: AppProps) {
         <Text wrap="truncate-end">
           <Text dimColor>{'\u2500'.repeat(Math.max(3, termWidth - 6))}</Text>
         </Text>
-        <Text dimColor>MODE: RUNTIME_SECURE</Text>
+        <Text dimColor>MODE: {(modeName ?? 'normal').toUpperCase()}</Text>
         <Text dimColor>{process.cwd()}</Text>
         <InputBar disabled={isGenerating} onSubmit={handleSubmit} />
       </Box>

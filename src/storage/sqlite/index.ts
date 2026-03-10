@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { StorageProvider } from '../base';
+import { StorageProvider, SessionMeta } from '../base';
 import { Content } from '../../types';
 
 export class SqliteStorage extends StorageProvider {
@@ -17,16 +17,12 @@ export class SqliteStorage extends StorageProvider {
   constructor(dbPath: string = './data/iris.db') {
     super();
 
-    // 确保父目录存在
     const dir = path.dirname(dbPath);
-    fs.mkdirSync(dir, { recursive: true });
+   fs.mkdirSync(dir, { recursive: true });
 
     this.db = new Database(dbPath);
-
-    // 开启 WAL 模式，提升并发性能
     this.db.pragma('journal_mode = WAL');
 
-    // 建表
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,8 +31,18 @@ export class SqliteStorage extends StorageProvider {
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+
+      CREATE TABLE IF NOT EXISTS session_meta (
+        session_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        cwd TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
   }
+
+  // ============ 对话历史 ============
 
   async getHistory(sessionId: string): Promise<Content[]> {
     const rows = this.db
@@ -63,9 +69,8 @@ export class SqliteStorage extends StorageProvider {
   }
 
   async clearHistory(sessionId: string): Promise<void> {
-    this.db
-      .prepare('DELETE FROM messages WHERE session_id = ?')
-      .run(sessionId);
+    this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+    this.db.prepare('DELETE FROM session_meta WHERE session_id = ?').run(sessionId);
   }
 
   async listSessions(): Promise<string[]> {
@@ -73,6 +78,47 @@ export class SqliteStorage extends StorageProvider {
       .prepare('SELECT DISTINCT session_id FROM messages')
       .all() as { session_id: string }[];
     return rows.map(row => row.session_id);
+}
+
+  // ============ 会话元数据 ============
+
+  async getMeta(sessionId: string): Promise<SessionMeta | null> {
+    const row = this.db
+   .prepare('SELECT * FROM session_meta WHERE session_id = ?')
+      .get(sessionId) as { session_id: string; title: string; cwd: string; created_at: string; updated_at: string } | undefined;
+    if (!row) return null;
+    return {
+      id: row.session_id,
+      title: row.title,
+      cwd: row.cwd,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
+  async saveMeta(meta: SessionMeta): Promise<void> {
+    this.db
+      .prepare(`
+        INSERT INTO session_meta (session_id, title, cwd, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          title = excluded.title,
+          cwd = excluded.cwd,
+          updated_at = excluded.updated_at
+      `)
+      .run(meta.id, meta.title, meta.cwd, meta.createdAt, meta.updatedAt);
+  }
+
+  async listSessionMetas(): Promise<SessionMeta[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM session_meta ORDER BY updated_at DESC')
+      .all() as { session_id: string; title: string; cwd: string; created_at: string; updated_at: string }[];
+    return rows.map(row => ({
+      id: row.session_id,
+      title: row.title,
+      cwd: row.cwd,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
 }
