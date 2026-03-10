@@ -32,7 +32,7 @@ function convertPartsToMessageParts(parts: Part[], toolStatus: ToolStatus = 'suc
   for (const part of parts) {
     if ('text' in part) {
       if (part.thought === true) {
-        result.push({ type: 'thought', text: part.text });
+        result.push({ type: 'thought', text: part.text, durationMs: part.thoughtDurationMs });
       } else {
         result.push({ type: 'text', text: part.text });
       }

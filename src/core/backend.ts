@@ -30,20 +30,41 @@ import {
 
 const logger = createLogger('Backend');
 
-function appendMergedPart(parts: Part[], nextPart: Part): void {
+interface ThoughtTimingState {
+  activeStartedAt?: number;
+}
+
+function appendMergedPart(parts: Part[], nextPart: Part, now: number, thoughtTiming?: ThoughtTimingState): Part {
+  let normalizedPart = nextPart;
+  if ('text' in nextPart && nextPart.thought === true) {
+    if (thoughtTiming && thoughtTiming.activeStartedAt == null) {
+      thoughtTiming.activeStartedAt = now;
+    }
+    normalizedPart = {
+      ...nextPart,
+      thoughtDurationMs: thoughtTiming?.activeStartedAt != null ? now - thoughtTiming.activeStartedAt : nextPart.thoughtDurationMs,
+    };
+  } else if (thoughtTiming) {
+    thoughtTiming.activeStartedAt = undefined;
+  }
+
   const lastPart = parts.length > 0 ? parts[parts.length - 1] : undefined;
-  if (lastPart && 'text' in lastPart && 'text' in nextPart) {
+  if (lastPart && 'text' in lastPart && 'text' in normalizedPart) {
     const lastThought = lastPart.thought === true;
-    const nextThought = nextPart.thought === true;
+    const nextThought = normalizedPart.thought === true;
     if (lastThought === nextThought) {
-      lastPart.text += nextPart.text;
-      if (nextPart.thoughtSignature && !lastPart.thoughtSignature) {
-        lastPart.thoughtSignature = nextPart.thoughtSignature;
+      lastPart.text += normalizedPart.text;
+      if (normalizedPart.thoughtSignature && !lastPart.thoughtSignature) {
+        lastPart.thoughtSignature = normalizedPart.thoughtSignature;
       }
-      return;
+      if (normalizedPart.thoughtDurationMs != null) {
+        lastPart.thoughtDurationMs = normalizedPart.thoughtDurationMs;
+      }
+      return normalizedPart;
     }
   }
-  parts.push(nextPart);
+  parts.push(normalizedPart);
+  return normalizedPart;
 }
 
 // ============ 配置与事件类型 ============
@@ -387,6 +408,7 @@ export class Backend extends EventEmitter {
   ): Promise<Content> {
     const parts: Part[] = [];
     let usageMetadata: UsageMetadata | undefined;
+    const thoughtTiming: ThoughtTimingState = {};
 
     this.emit('stream:start', sessionId);
 
@@ -406,10 +428,12 @@ export class Backend extends EventEmitter {
       }
 
       if (deltaParts.length > 0) {
+        const emittedParts: Part[] = [];
+        const now = Date.now();
         for (const part of deltaParts) {
-          appendMergedPart(parts, part);
+          emittedParts.push(appendMergedPart(parts, part, now, thoughtTiming));
         }
-        this.emit('stream:parts', sessionId, deltaParts);
+        this.emit('stream:parts', sessionId, emittedParts);
       }
 
       if (chunk.textDelta) {

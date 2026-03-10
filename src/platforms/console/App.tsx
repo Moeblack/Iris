@@ -1,11 +1,11 @@
 /**
  * TUI 根组件
  *
- * 已完成的消息用 <Static> 固化输出，只有当前活动区域动态刷新。
+ * 消息区使用普通渲染，保证终端宽度变化时能够重新换行。
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Box, Text, Static, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { UsageMetadata } from '../../types';
 import Gradient from 'ink-gradient';
 import { ToolInvocation } from '../../types';
@@ -26,6 +26,9 @@ function appendMergedMessagePart(parts: MessagePart[], nextPart: MessagePart): v
   }
   if (lastPart && lastPart.type === 'thought' && nextPart.type === 'thought') {
     lastPart.text += nextPart.text;
+    if (nextPart.durationMs != null) {
+      lastPart.durationMs = nextPart.durationMs;
+    }
     return;
   }
   if (lastPart && lastPart.type === 'tool_use' && nextPart.type === 'tool_use') {
@@ -171,7 +174,8 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
 
       pushStreamParts(parts) {
         for (const part of parts) {
-          appendMergedMessagePart(streamPartsRef.current, { ...part } as MessagePart);
+          const normalizedPart = { ...part } as MessagePart;
+          appendMergedMessagePart(streamPartsRef.current, normalizedPart);
         }
         if (!throttleTimerRef.current) {
           throttleTimerRef.current = setTimeout(() => {
@@ -385,34 +389,22 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   const staticMessages = lastIsActiveAssistant ? messages.slice(0,-1) : messages;
   const activeMessage = lastIsActiveAssistant ? lastMsg : null;
 
-  type StaticItem =
-    | { id: string; kind: 'header' }
-    | { id: string; kind: 'message'; msg: ChatMessage };
-
-  const staticItems: StaticItem[] = [
-    { id: '__header__', kind: 'header' },
-    ...staticMessages.map(msg => ({ id: msg.id, kind: 'message' as const, msg })),
-  ];
-
   return (
     <Box flexDirection="column" width="100%">
-      {/* 已完成内容 - 固化输出 */}
-      <Static items={staticItems}>
-        {(item) => {
-          if (item.kind === 'header') {
-            return (
-              <Box key={item.id} marginBottom={1}>
-                <Gradient name="atlas">
-                  <Text bold italic>IRIS</Text>
-                </Gradient>
-              </Box>
-            );
-          }
-       return (<Box key={item.id} marginBottom={1}>
-            <MessageItem msg={item.msg} />
-          </Box>);
-        }}
-      </Static>
+      <Box marginBottom={1}>
+        <Gradient name="atlas">
+          <Text bold italic>IRIS</Text>
+        </Gradient>
+      </Box>
+
+      {/* 已完成内容 */}
+      <Box flexDirection="column">
+        {staticMessages.map(msg => (
+          <Box key={msg.id} marginBottom={1}>
+            <MessageItem msg={msg} />
+          </Box>
+        ))}
+      </Box>
 
       {/* 动态区域 */}
       <Box flexDirection="column">

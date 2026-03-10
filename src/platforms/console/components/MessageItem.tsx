@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 import { ToolInvocation } from '../../../types';
 import { Spinner } from './Spinner';
 import { ToolCall } from './ToolCall';
@@ -12,6 +12,20 @@ function getLatestThoughtLine(text: string): string {
   const lines = text.replace(/\r\n/g, '\n').split('\n').map(s => s.trim()).filter(Boolean);
   if (lines.length === 0) return '';
   return lines[lines.length - 1];
+}
+
+function getThoughtTailPreview(text: string, maxChars: number): string {
+  const latestLine = getLatestThoughtLine(text);
+  if (latestLine.length <= maxChars) return latestLine;
+  return `…${latestLine.slice(-(maxChars - 1))}`;
+}
+
+function formatElapsedMs(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatTokenSpeed(tokenOut: number, durationMs: number): string {
+  return `${(tokenOut / Math.max(durationMs / 1000, 0.001)).toFixed(1)} t/s`;
 }
 
 /** 极简 Markdown 渲染 */
@@ -32,7 +46,7 @@ function renderMarkdown(text: string, baseColor: string) {
 
 export type MessagePart =
   | { type: 'text'; text: string }
-  | { type: 'thought'; text: string }
+  | { type: 'thought'; text: string; durationMs?: number }
   | { type: 'tool_use'; tools: ToolInvocation[] };
 
 export interface ChatMessage {
@@ -63,6 +77,7 @@ const CIRCLE_FILL = '●';
 export const MessageItem = React.memo(function MessageItem(
   { msg, liveTools, liveParts, isStreaming }: MessageItemProps
 ) {
+  const { stdout } = useStdout();
   const isUser = msg.role === 'user';
   const themeColor = isUser ? 'cyan' : 'green';
   const labelText = isUser ? 'USER' : 'IRIS';
@@ -91,9 +106,9 @@ export const MessageItem = React.memo(function MessageItem(
         if (part.type === 'text' && part.text.length > 0) {
           const isLastPart = i === displayParts.length - 1;
           return (
-            <Box key={i} paddingLeft={0}>
+            <Box key={i} paddingLeft={0} width="100%">
               <Text dimColor color={themeColor}>{PIPE} </Text>
-              <Box flexGrow={1}>
+              <Box flexGrow={1} width="100%">
                 <Text wrap="wrap">
                   {renderMarkdown(part.text, textColor)}
                   {isLastPart && isStreaming && <Text backgroundColor="green"> </Text>}
@@ -103,16 +118,17 @@ export const MessageItem = React.memo(function MessageItem(
           );
         }
         if (part.type === 'thought') {
-          const latestLine = getLatestThoughtLine(part.text);
+          const previewText = getThoughtTailPreview(part.text, Math.max(24, (stdout?.columns ?? 80) - 20));
           const isLastPart = i === displayParts.length - 1;
+          const prefix = part.durationMs != null ? `[THINKING ${formatElapsedMs(part.durationMs)}]` : '[THINKING]';
           return (
-            <Box key={i} paddingLeft={0}>
+            <Box key={i} paddingLeft={0} width="100%">
               <Text dimColor color={themeColor}>{PIPE} </Text>
-              <Box flexGrow={1}>
-                <Text wrap="truncate-end">
-                  <Text bold color="yellow">[THINKING]</Text>
-                  {latestLine ? <Text dimColor> {latestLine}</Text> : null}
-                  {isLastPart && isStreaming && <Text backgroundColor="yellow"> </Text>}
+              <Box flexGrow={1} width="100%">
+                <Text wrap="truncate-end" italic>
+                  <Text bold italic color="gray">{prefix}</Text>
+                  {previewText ? <Text dimColor italic> {previewText}</Text> : null}
+                  {isLastPart && isStreaming && <Text backgroundColor="gray"> </Text>}
                 </Text>
               </Box>
             </Box>
@@ -120,7 +136,7 @@ export const MessageItem = React.memo(function MessageItem(
         }
         if (part.type === 'tool_use') {
           return (
-            <Box key={i} flexDirection="column">
+            <Box key={i} flexDirection="column" width="100%">
               <Text>
                 <Text dimColor color={themeColor}>{PIPE} </Text>
                 <Text bold color="gray">[TOOL_USE]</Text>
@@ -136,28 +152,29 @@ export const MessageItem = React.memo(function MessageItem(
 
       {/* assistant 消息的 token / 耗时信息 */}
       {!isUser && !isStreaming && (msg.tokenIn != null || msg.durationMs != null) && (
-        <Box paddingLeft={0}>
+        <Box paddingLeft={0} width="100%">
           <Text dimColor color={themeColor}>{PIPE} </Text>
           <Text dimColor>
             {msg.tokenIn != null && `IN: ${msg.tokenIn.toLocaleString()}`}
             {msg.tokenIn != null && msg.tokenOut != null && '  '}
             {msg.tokenOut != null && `OUT: ${msg.tokenOut.toLocaleString()}`}
-            {msg.durationMs != null && (msg.tokenIn != null ? '  ' : '')}
+            {msg.durationMs != null && (msg.tokenIn != null || msg.tokenOut != null ? '    ' : '')}
             {msg.durationMs != null && `TIME: ${(msg.durationMs / 1000).toFixed(1)}s`}
+            {msg.tokenOut != null && msg.durationMs != null && `   ${formatTokenSpeed(msg.tokenOut, msg.durationMs)}`}
           </Text>
         </Box>
       )}
 
       {/* 没有内容但正在流式生成 */}
       {!hasAnyContent && isStreaming && (
-        <Box paddingLeft={0}>
+        <Box paddingLeft={0} width="100%">
           <Text><Text dimColor color={themeColor}>{PIPE} </Text><Spinner /><Text dimColor italic> generating...</Text></Text>
         </Box>
       )}
 
       {/* 没有内容也不在流式 */}
       {!hasAnyContent && !isStreaming && !isUser && (
-        <Box paddingLeft={0}>
+        <Box paddingLeft={0} width="100%">
           <Text dimColor color={themeColor}>{PIPE}</Text>
         </Box>
       )}

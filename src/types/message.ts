@@ -12,6 +12,8 @@ export interface TextPart {
   thought?: boolean;
   /** Gemini thinking 签名 */
   thoughtSignature?: string;
+  /** 连续 thought 片段的累计耗时（毫秒） */
+  thoughtDurationMs?: number;
 }
 
 /** 内联数据部分（图片等二进制数据，base64 编码） */
