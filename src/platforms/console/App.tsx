@@ -18,8 +18,15 @@ function nextMsgId() {
   return `msg-${++_msgIdCounter}`;
 }
 
+export interface MessageMeta {
+  tokenIn?: number;
+  tokenOut?: number;
+  durationMs?: number;
+}
+
 export interface AppHandle {
-  addMessage(role: 'user' | 'assistant', content: string): void;
+  addMessage(role: 'user' | 'assistant', content: string, meta?: MessageMeta): void;
+
   startStream(): void;
   pushStreamChunk(chunk: string): void;
   endStream(): void;
@@ -65,7 +72,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
 
   useEffect(() => {
     const handle: AppHandle = {
-      addMessage(role, content) {
+      addMessage(role, content, meta?) {
         setMessages(prev => {
           if (role === 'assistant' && prev.length > 0 && prev[prev.length - 1].role === 'assistant') {
             const copy = [...prev];
@@ -77,10 +84,10 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
             } else {
               parts.push({ type: 'text', text: content });
             }
-            copy[copy.length - 1] = { ...last, parts };
+            copy[copy.length - 1] = { ...last, parts, ...meta };
             return copy;
           }
-          return [...prev, { id: nextMsgId(), role, parts: [{ type: 'text', text: content }] }];
+          return [...prev, { id: nextMsgId(), role, parts: [{ type: 'text', text: content }], ...meta }];
         });
       },
 

@@ -149,7 +149,21 @@ export class ConsolePlatform extends PlatformAdapter {
         .map((p: any) => p.text)
         .join('') || '';
       if (text) {
-        this.appHandle?.addMessage(role as 'user' | 'assistant', text);
+        const meta: Record<string, number> = {};
+        if (msg.usageMetadata?.promptTokenCount != null) {
+          meta.tokenIn = msg.usageMetadata.promptTokenCount;
+        }
+        if (msg.usageMetadata?.candidatesTokenCount != null) {
+          meta.tokenOut = msg.usageMetadata.candidatesTokenCount;
+        }
+        if (msg.durationMs != null) {
+          meta.durationMs = msg.durationMs;
+        }
+        this.appHandle?.addMessage(role as 'user' | 'assistant', text, Object.keys(meta).length > 0 ? meta : undefined);
+      }
+      // 更新 CTX 显示
+      if (msg.usageMetadata) {
+        this.appHandle?.setUsage(msg.usageMetadata);
       }
     }
   }

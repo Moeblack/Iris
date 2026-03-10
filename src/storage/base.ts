@@ -55,15 +55,18 @@ export abstract class StorageProvider {
     return this.constructor.name;
   }
 
-  /** 统一 Content 的字段顺序：role → parts → usageMetadata → 其余 */
+  /** 统一 Content 的字段顺序：role → parts → usageMetadata → durationMs → 其余 */
   protected normalize(content: Content): Content {
-    const known = new Set(['role', 'parts', 'usageMetadata']);
+    const known = new Set(['role', 'parts', 'usageMetadata', 'durationMs']);
     const normalized: Content = {
       role: content.role,
   parts: content.parts,
     };
     if (content.usageMetadata) {
       normalized.usageMetadata = content.usageMetadata;
+    }
+    if (content.durationMs != null) {
+      normalized.durationMs = content.durationMs;
     }
     for (const [k, v] of Object.entries(content)) {
       if (!known.has(k)) {

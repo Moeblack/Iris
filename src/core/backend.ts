@@ -267,6 +267,7 @@ export class Backend extends EventEmitter {
 
   private async handleMessage(sessionId: string, userParts: Part[]): Promise<void> {
     this.activeSessionId = sessionId;
+    const startTime = Date.now();
 
     // 1. 加载历史并追加用户消息
     const history = await this.storage.getHistory(sessionId);
@@ -328,15 +329,24 @@ export class Backend extends EventEmitter {
     // 5. 执行工具循环
     const result = await loop.run(history, callLLM, { extraParts });
 
-    // 6. 持久化新增消息
+    // 6. 将耗时写入最后一条 model 消息
+    const durationMs = Date.now() - startTime;
+    for (let i = result.history.length - 1; i >= 0; i--) {
+      if (result.history[i].role === 'model') {
+        result.history[i].durationMs = durationMs;
+        break;
+      }
+    }
+
+    // 7. 持久化新增消息
     for (let i = historyLenBefore; i < result.history.length; i++) {
       await this.storage.addMessage(sessionId, result.history[i]);
     }
 
-    // 7. 管理会话元数据
+    // 8. 管理会话元数据
     await this.updateSessionMeta(sessionId, userParts, isNewSession);
 
-    // 8. 非流式模式：发送最终文本
+    // 9. 非流式模式：发送最终文本
     if (!this.stream && result.text) {
       this.emit('response', sessionId, result.text);
     }

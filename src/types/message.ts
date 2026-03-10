@@ -61,6 +61,8 @@ export interface Content {
   parts: Part[];
   /** 该轮 API 调用的 Token 用量（存储用，组装请求时剥离） */
   usageMetadata?: UsageMetadata;
+  /** 本轮响应耗时（毫秒），存储用 */
+  durationMs?: number;
 }
 
 // ============ 类型守卫工具函数 ============
