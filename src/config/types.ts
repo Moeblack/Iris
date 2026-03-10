@@ -42,6 +42,8 @@ export interface SystemConfig {
   stream: boolean;
   /** 子代理最大嵌套深度，默认 3 */
   maxAgentDepth: number;
+  /** 默认模式名称（可选，需与 modes 中定义的名称对应） */
+  defaultMode?: string;
 }
 
 export interface MemoryConfig {
@@ -74,4 +76,6 @@ export interface AppConfig {
   system: SystemConfig;
   memory?: MemoryConfig;
   mcp?: MCPConfig;
+  /** 用户自定义模式（可选） */
+  modes?: import('../modes/types').ModeDefinition[];
 }

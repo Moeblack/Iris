@@ -15,6 +15,7 @@ import { parseStorageConfig } from './storage';
 import { parseSystemConfig } from './system';
 import { parseMemoryConfig } from './memory';
 import { parseMCPConfig } from './mcp';
+import { parseModeConfig } from './mode';
 
 export type { AppConfig, LLMConfig, TieredLLMConfig, PlatformConfig, StorageConfig, SystemConfig, MemoryConfig, MCPConfig, MCPServerConfig } from './types';
 
@@ -49,5 +50,6 @@ export function loadConfig(): AppConfig {
     system: parseSystemConfig(data.system),
     memory: parseMemoryConfig(data.memory),
     mcp: parseMCPConfig(data.mcp),
+    modes: parseModeConfig(data.modes),
   };
 }

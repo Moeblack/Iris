@@ -15,6 +15,7 @@ import { ToolStateManager } from '../tools/state';
 import { buildExecutionPlan, executePlan } from '../tools/scheduler';
 import { PromptAssembler } from '../prompt/assembler';
 import { MemoryProvider } from '../memory/base';
+import { ModeRegistry, ModeDefinition, applyToolFilter } from '../modes';
 import { createLogger } from '../logger';
 import {
   Content, Part, LLMRequest, UsageMetadata,
@@ -33,6 +34,8 @@ export interface OrchestratorConfig {
   autoRecall?: boolean;
   /** Agent 协调指导文本 */
   agentGuidance?: string;
+  /** 默认模式名称 */
+  defaultMode?: string;
 }
 
 export class Orchestrator {
@@ -47,6 +50,8 @@ export class Orchestrator {
   private autoRecall: boolean;
   private agentGuidance?: string;
   private memory?: MemoryProvider;
+  private modeRegistry?: ModeRegistry;
+  private defaultMode?: string;
 
   constructor(
     platform: PlatformAdapter,
@@ -57,6 +62,7 @@ export class Orchestrator {
     prompt: PromptAssembler,
     config?: OrchestratorConfig,
     memory?: MemoryProvider,
+    modeRegistry?: ModeRegistry,
   ) {
     this.platform = platform;
     this.router = router;
@@ -69,6 +75,8 @@ export class Orchestrator {
     this.autoRecall = config?.autoRecall ?? true;
     this.agentGuidance = config?.agentGuidance;
     this.memory = memory;
+    this.modeRegistry = modeRegistry;
+    this.defaultMode = config?.defaultMode;
   }
 
   /** 启动：注册消息回调并启动平台 */
@@ -164,6 +172,14 @@ export class Orchestrator {
       extraParts.push({ text: this.agentGuidance });
     }
 
+    // 1.6 解析当前模式（决定工具集和提示词覆盖）
+    const mode = this.resolveMode();
+    const effectiveTools = mode ? applyToolFilter(mode, this.tools) : this.tools;
+    if (mode?.systemPrompt) {
+      if (!extraParts) extraParts = [];
+      extraParts.unshift({ text: mode.systemPrompt });
+    }
+
     // 2. LLM 对话 + 工具执行循环
     let rounds = 0;
     while (rounds < this.maxToolRounds) {
@@ -174,7 +190,7 @@ export class Orchestrator {
 
       // 2a. 获取历史并组装请求
       const history = await this.storage.getHistory(sessionId);
-      const request = this.prompt.assemble(history, this.tools.getDeclarations(), undefined, extraParts);
+      const request = this.prompt.assemble(history, effectiveTools.getDeclarations(), undefined, extraParts);
 
       // 2b. 调用 LLM（流式或非流式）
       let modelContent: Content;
@@ -286,6 +302,14 @@ export class Orchestrator {
     const responseParts = await executePlan(functionCalls, plan, invocationIds, this.tools, this.toolState);
 
     await this.storage.addMessage(sessionId, { role: 'user', parts: responseParts });
+  }
+
+  // ============ 模式解析 ============
+
+  /** 解析当前生效的模式定义 */
+  private resolveMode(): ModeDefinition | undefined {
+    if (!this.defaultMode || !this.modeRegistry) return undefined;
+    return this.modeRegistry.get(this.defaultMode);
   }
 }
 

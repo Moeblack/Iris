@@ -71,11 +71,34 @@ system:
 
   # 子代理最大嵌套深度（默认 3）
   # maxAgentDepth: 3
+  # 默认模式（需与下方 modes 中定义的名称对应）
+  # defaultMode: code
 
 # 记忆配置（可选）
 # memory:
 #   enabled: true
 #   dbPath: ./data/memory.db
+
+# 模式配置（可选）
+# 不同模式可定义不同的系统提示词和工具策略
+# modes:
+#   code:
+#     description: "代码开发模式"
+#     systemPrompt: "你是一个专注于代码开发的 AI 助手。请严格按照用户需求编写和修改代码。"
+#     tools:
+#       exclude: [memory_add, memory_delete]
+#
+#   readonly:
+#     description: "只读分析模式"
+#     systemPrompt: "你是一个只读分析助手。你只能查看和分析，不能修改任何文件。"
+#     tools:
+#       include: [read_file, memory_search, get_current_time, calculator]
+#
+#   chat:
+#     description: "纯聊天模式"
+#     systemPrompt: "你是一个友好的聊天助手。"
+#     tools:
+#       include: [get_current_time, calculator]
 
 # MCP 服务器配置（可选）
 # 连接外部 MCP 服务器，自动将其工具注入 LLM 工具列表

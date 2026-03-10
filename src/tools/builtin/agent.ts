@@ -10,6 +10,7 @@ import { LLMRouter } from '../../llm/router';
 import { ToolRegistry } from '../registry';
 import { AgentTypeRegistry } from '../../core/agent-types';
 import { AgentExecutor } from '../../core/agent-executor';
+import { ModeRegistry, ModeDefinition, applyToolFilter } from '../../modes';
 import { createLogger } from '../../logger';
 
 const logger = createLogger('AgentTool');
@@ -20,6 +21,8 @@ export interface AgentToolDeps {
   tools: ToolRegistry;
   agentTypes: AgentTypeRegistry;
   maxDepth: number;
+  /** 模式注册表（可选，支持子代理指定模式） */
+  modeRegistry?: ModeRegistry;
 }
 
 /**
@@ -51,6 +54,10 @@ export function createAgentTool(deps: AgentToolDeps, currentDepth: number = 0): 
             type: 'string',
             description: '子代理类型（默认 general-purpose）',
           },
+          mode: {
+            type: 'string',
+            description: '子代理运行模式（可选，影响提示词和可用工具集）',
+          },
         },
         required: ['prompt'],
       },
@@ -58,6 +65,7 @@ export function createAgentTool(deps: AgentToolDeps, currentDepth: number = 0): 
     handler: async (args) => {
       const prompt = args.prompt as string;
       const typeName = (args.agent_type as string) || 'general-purpose';
+      const modeName = args.mode as string | undefined;
 
       // 深度检查
       if (currentDepth >= deps.maxDepth) {
@@ -74,23 +82,35 @@ export function createAgentTool(deps: AgentToolDeps, currentDepth: number = 0): 
       // 构建子工具集
       let subTools: ToolRegistry;
       if (typeConfig.allowedTools) {
-        // 白名单模式
         subTools = deps.tools.createSubset(typeConfig.allowedTools);
       } else if (typeConfig.excludedTools) {
-        // 黑名单模式
         subTools = deps.tools.createFiltered(typeConfig.excludedTools);
       } else {
-        // 默认排除 agent 工具防止递归
         subTools = deps.tools.createFiltered(['agent']);
       }
 
-      logger.info(`创建子代理: type=${typeName} depth=${currentDepth + 1}/${deps.maxDepth} 工具数=${subTools.size}`);
+      // 如果指定了模式，在 AgentType 过滤后再叠加模式过滤
+      let subSystemPrompt = typeConfig.systemPrompt;
+      if (modeName && deps.modeRegistry) {
+        const mode = deps.modeRegistry.get(modeName);
+   if (mode) {
+          subTools = applyToolFilter(mode, subTools);
+          if (mode.systemPrompt) {
+            subSystemPrompt = mode.systemPrompt + '\n\n' + subSystemPrompt;
+          }
+        } else {
+          logger.warn(`子代理指定的模式 "${modeName}" 未找到，忽略`);
+        }
+      }
+
+      logger.info(`创建子代理: type=${typeName} mode=${modeName ?? 'none'} depth=${currentDepth + 1}/${deps.maxDepth} 工具数=${subTools.size}`);
+
 
       // 创建并执行子 Agent
       const executor = new AgentExecutor(
         deps.getRouter(),
         subTools,
-        typeConfig.systemPrompt,
+        subSystemPrompt,
         typeConfig.tier,
         typeConfig.maxToolRounds,
       );

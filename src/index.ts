@@ -39,6 +39,9 @@ import { createAgentTool } from './tools/builtin/agent';
 // 子 Agent
 import { AgentTypeRegistry, createDefaultAgentTypes, buildAgentGuidance } from './core/agent-types';
 
+// 模式
+import { ModeRegistry } from './modes';
+
 // 提示词
 import { PromptAssembler } from './prompt/assembler';
 import { DEFAULT_SYSTEM_PROMPT } from './prompt/templates/default';
@@ -93,6 +96,14 @@ async function main() {
     if (t.name === 'recall' && !memory) continue;
     agentTypes.register(t);
   }
+
+  // ---- 3.5 注册用户自定义模式 ----
+  const modeRegistry = new ModeRegistry();
+  if (config.modes) {
+    modeRegistry.registerAll(config.modes);
+  }
+  const defaultMode = config.system.defaultMode;
+
   // orchestrator 在后面创建，但闭包在运行时才求值，此时已完成初始化
   let orchestrator: Orchestrator;
 
@@ -103,10 +114,12 @@ async function main() {
     tools,
     agentTypes,
     maxDepth: config.system.maxAgentDepth,
+    modeRegistry,
   }));
 
   // ---- 3.6 构建 Agent 协调指导 ----
   const agentGuidance = buildAgentGuidance(agentTypes, !!memory);
+
 
   // ---- 4. 创建平台适配器 ----
   let platform: PlatformAdapter;
@@ -150,7 +163,8 @@ async function main() {
     stream: config.system.stream,
     autoRecall,
     agentGuidance,
-  }, memory);
+    defaultMode,
+  }, memory, modeRegistry);
 
   // 注入 Orchestrator 和 MCP 管理器到 WebPlatform（支持配置热重载）
   if (platform instanceof WebPlatform) {
