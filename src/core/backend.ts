@@ -49,18 +49,24 @@ function appendMergedPart(parts: Part[], nextPart: Part, now: number, thoughtTim
   }
 
   const lastPart = parts.length > 0 ? parts[parts.length - 1] : undefined;
-  if (lastPart && 'text' in lastPart && 'text' in normalizedPart) {
+  if (lastPart && 'text' in lastPart && ('text' in normalizedPart || 'thoughtSignatures' in normalizedPart)) {
     const lastThought = lastPart.thought === true;
     const nextThought = normalizedPart.thought === true;
     if (lastThought === nextThought) {
-      lastPart.text += normalizedPart.text;
-      if (normalizedPart.thoughtSignature && !lastPart.thoughtSignature) {
-        lastPart.thoughtSignature = normalizedPart.thoughtSignature;
+      // 如果新 part 有签名且与上一个不同，则不合并，以保留位置
+      const lastSigs = JSON.stringify(lastPart.thoughtSignatures || {});
+      const nextSigs = JSON.stringify(normalizedPart.thoughtSignatures || {});
+
+      // 只有在签名一致，或者新块没有签名时才合并
+      if (nextSigs === '{}' || lastSigs === nextSigs) {
+        if (normalizedPart.text) {
+          lastPart.text = (lastPart.text || '') + normalizedPart.text;
+        }
+        if (normalizedPart.thoughtDurationMs != null) {
+          lastPart.thoughtDurationMs = normalizedPart.thoughtDurationMs;
+        }
+        return lastPart;
       }
-      if (normalizedPart.thoughtDurationMs != null) {
-        lastPart.thoughtDurationMs = normalizedPart.thoughtDurationMs;
-      }
-      return normalizedPart;
     }
   }
   parts.push(normalizedPart);

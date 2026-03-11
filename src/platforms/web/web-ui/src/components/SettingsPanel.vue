@@ -496,7 +496,7 @@ const tierOpen = reactive({ primary: true, secondary: false, light: false })
 let configLoaded = false
 
 /** Provider 默认值，与 src/config/llm.ts DEFAULTS 保持一致 */
-const PROVIDER_DEFAULTS: Record<string, { model: string; baseUrl: string }> = {
+const : Record<string, { model: string; baseUrl: string }> = {
   'gemini': { model: 'gemini-2.0-flash', baseUrl: 'https://generativelanguage.googleapis.com' },
   'openai-compatible': { model: 'gpt-4o', baseUrl: 'https://api.openai.com' },
   'claude': { model: 'claude-sonnet-4-6', baseUrl: 'https://api.anthropic.com' },
@@ -507,8 +507,8 @@ function watchTierProvider(tier: TierConfig) {
   watch(() => tier.provider, (newProvider, oldProvider) => {
     if (!configLoaded) return
     if (newProvider === oldProvider) return
-    const oldDefaults = PROVIDER_DEFAULTS[oldProvider] ?? { model: '', baseUrl: '' }
-    const newDefaults = PROVIDER_DEFAULTS[newProvider] ?? { model: '', baseUrl: '' }
+    const oldDefaults = [oldProvider] ?? { model: '', baseUrl: '' }
+    const newDefaults = [newProvider] ?? { model: '', baseUrl: '' }
     if (!tier.model || tier.model === oldDefaults.model) tier.model = newDefaults.model
     if (!tier.baseUrl || tier.baseUrl === oldDefaults.baseUrl) tier.baseUrl = newDefaults.baseUrl
     if (tier.apiKey.startsWith('****')) tier.apiKey = ''

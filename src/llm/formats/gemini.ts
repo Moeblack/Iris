@@ -12,8 +12,13 @@ export class GeminiFormat implements FormatAdapter {
 
   /** 请求直通，但过滤内部字段 */
   encodeRequest(request: LLMRequest, _stream?: boolean): unknown {
-    // 深拷贝请求并过滤内部字段
-    return filterInternalFields(request);
+    // 深拷贝并过滤内部字段
+    const filtered = filterInternalFields(request);
+
+    // 针对 Gemini 渠道，将 thoughtSignatures.gemini 映射回 thoughtSignature 字段发送
+    mapSignaturesToProvider(filtered);
+
+    return filtered;
   }
 
   /** 从 Gemini API 响应中提取 content、finishReason、usageMetadata */
@@ -23,6 +28,19 @@ export class GeminiFormat implements FormatAdapter {
     if (!candidate?.content) {
       throw new Error(`Gemini API 未返回有效内容: ${JSON.stringify(data)}`);
     }
+
+    if (candidate.content.parts) {
+      for (const part of candidate.content.parts) {
+        const rawPart = part as any;
+        // 1. 转换并清理签名字段
+        if (rawPart.thoughtSignature) {
+          if (!part.thoughtSignatures) part.thoughtSignatures = {};
+          part.thoughtSignatures.gemini = rawPart.thoughtSignature;
+          delete rawPart.thoughtSignature;
+        }
+      }
+    }
+
     return {
       content: candidate.content,
       finishReason: candidate.finishReason,
@@ -38,22 +56,48 @@ export class GeminiFormat implements FormatAdapter {
 
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
-        if ('text' in part) {
+        const rawPart = part as any;
+        const hasText = 'text' in rawPart;
+        const hasSignature = 'thoughtSignature' in rawPart;
+
+        if (hasText || hasSignature) {
           if (!chunk.partsDelta) chunk.partsDelta = [];
-          chunk.partsDelta.push(part);
-          if (!part.thought) {
-            chunk.textDelta = (chunk.textDelta ?? '') + part.text;
+          
+          // 处理签名
+          if (hasSignature) {
+            if (!rawPart.thoughtSignatures) rawPart.thoughtSignatures = {};
+            rawPart.thoughtSignatures.gemini = rawPart.thoughtSignature;
+            
+            if (!chunk.thoughtSignatures) chunk.thoughtSignatures = {};
+            chunk.thoughtSignatures.gemini = rawPart.thoughtSignature;
+            
+            delete rawPart.thoughtSignature;
           }
+
+          // 处理文本及清理
+          if (hasText) {
+            if (rawPart.text && !rawPart.thought) {
+              chunk.textDelta = (chunk.textDelta ?? '') + rawPart.text;
+            }
+          }
+
+          chunk.partsDelta.push(rawPart);
         }
         if ('functionCall' in part) {
           if (!chunk.functionCalls) chunk.functionCalls = [];
           chunk.functionCalls.push(part);
-          if (!chunk.partsDelta) chunk.partsDelta = [];
           chunk.partsDelta.push(part);
         }
-        // 提取思考签名（Gemini thinking model 返回）
-        if ('thoughtSignature' in part && !chunk.thoughtSignature) {
-          chunk.thoughtSignature = part.thoughtSignature as string;
+
+        // 提取思考签名（从原始响应中提取并存入统一字段）
+        const rawPart = part as any;
+        if (rawPart.thoughtSignature) {
+          if (!chunk.thoughtSignatures) chunk.thoughtSignatures = {};
+          chunk.thoughtSignatures.gemini = rawPart.thoughtSignature;
+          // 如果 Delta 中包含 thoughtSignatures 对象，也合并进去
+          if (part.thoughtSignatures?.gemini) {
+            chunk.thoughtSignatures.gemini = part.thoughtSignatures.gemini;
+          }
         }
       }
     }
@@ -85,6 +129,7 @@ function filterInternalFields(obj: unknown): unknown {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
     // 跳过内部字段
+    // 注意：不要在这里过滤 thoughtSignatures，因为它需要由 mapSignaturesToProvider 处理
     if (key === 'durationMs' || key === 'streamOutputDurationMs' || key === 'thoughtDurationMs' || key === 'usageMetadata') {
       continue;
     }
@@ -92,4 +137,28 @@ function filterInternalFields(obj: unknown): unknown {
     result[key] = filterInternalFields(value);
   }
   return result;
+}
+
+/** 将内部统一的 thoughtSignatures 映射回 Provider 预期的字段（如 Gemini 的 thoughtSignature） */
+function mapSignaturesToProvider(obj: unknown): void {
+  if (obj === null || obj === undefined || typeof obj !== 'object') {
+    return;
+  }
+
+  if (Array.isArray(obj)) {
+    obj.forEach(mapSignaturesToProvider);
+    return;
+  }
+
+  const record = obj as Record<string, any>;
+  if (record.thoughtSignatures?.gemini) {
+    record.thoughtSignature = record.thoughtSignatures.gemini;
+  }
+  if (record.thoughtSignatures) {
+    delete record.thoughtSignatures;
+  }
+
+  for (const value of Object.values(record)) {
+    mapSignaturesToProvider(value);
+  }
 }

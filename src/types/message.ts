@@ -7,11 +7,15 @@
 
 /** 文本部分 */
 export interface TextPart {
-  text: string;
+  text?: string;
   /** Gemini thinking 文本块 */
   thought?: boolean;
-  /** Gemini thinking 签名 */
-  thoughtSignature?: string;
+  /** 不同渠道格式的思考签名 */
+  thoughtSignatures?: {
+    gemini?: string;
+    claude?: string;
+    [key: string]: string | undefined;
+  };
   /** 连续 thought 片段的累计耗时（毫秒） */
   thoughtDurationMs?: number;
 }
@@ -76,7 +80,7 @@ export interface Content {
 // ============ 类型守卫工具函数 ============
 
 export function isTextPart(part: Part): part is TextPart {
-  return 'text'in part;
+  return 'text' in part || 'thought' in part || 'thoughtSignatures' in part;
 }
 
 export function isThoughtTextPart(part: Part): part is TextPart & { thought: true } {
@@ -101,5 +105,5 @@ export function isFunctionResponsePart(part: Part): part is FunctionResponsePart
 
 /** 从 Parts 数组中提取所有文本并拼接 */
 export function extractText(parts: Part[]): string {
-  return parts.filter(isVisibleTextPart).map(p => p.text).join('');
+  return parts.filter(isVisibleTextPart).map(p => p.text || '').join('');
 }
