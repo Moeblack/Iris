@@ -134,6 +134,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   const [streamingParts, setStreamingParts] = useState<MessagePart[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [activeHidden, setActiveHidden] = useState(false);
   const [contextTokens, setContextTokens] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [sessionList, setSessionList] = useState<SessionMeta[]>([]);
@@ -145,6 +146,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   const toolInvocationsRef = useRef<ToolInvocation[]>([]);
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingCommittedStreamPartsRef = useRef(0);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUsageRef = useRef<UsageMetadata | null>(null);
 
   useEffect(() => {
@@ -244,7 +246,24 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
       },
 
       setGenerating(generating) {
-        setIsGenerating(generating);
+        if (hideTimerRef.current) {
+          clearTimeout(hideTimerRef.current);
+          hideTimerRef.current = null;
+        }
+        if (!generating) {
+          // 两阶段提交，避免 Ink <Static> 转场时内容重复：
+          // Phase 1: 先将动态区的 activeMessage 隐藏（但仍排除在 Static 外）
+          setActiveHidden(true);
+          // Phase 2: 下一帧再真正结束 generating，消息进入 Static 时动态区已空
+          hideTimerRef.current = setTimeout(() => {
+            hideTimerRef.current = null;
+            setIsGenerating(false);
+            setActiveHidden(false);
+          }, 30);
+        } else {
+          setActiveHidden(false);
+          setIsGenerating(true);
+        }
       },
 
       clearMessages() {
@@ -414,16 +433,18 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   // ============ 对话视图 ============
 
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-  const lastIsActiveAssistant = isGenerating && lastMsg?.role === 'assistant';
-  const activeMessage = lastIsActiveAssistant ? lastMsg : null;
+  // activeHidden 为 true 时，消息仍属于"活跃"（排除在 Static 外），但不在动态区渲染
+  const lastIsActiveAssistant = isGenerating && lastMsg?.role === 'assistant';  // 控制 Static 边界
+  const excludeFromStatic = lastIsActiveAssistant || activeHidden;             // Phase 1 期间也排除
+  const activeMessage = (lastIsActiveAssistant && !activeHidden) ? lastMsg : null;
 
   // Static 需要稳定的 items 数组：只包含已经渲染过不会再变的消息
   const staticMessages = useMemo(() => {
-    const candidates = lastIsActiveAssistant ? messages.slice(0, -1) : messages;
+    const candidates = excludeFromStatic ? messages.slice(0, -1) : messages;
     // 过滤掉已被 <Static> 渲染过的（Ink 内部会去重），这里只需返回全量即可
     // Ink 的 <Static> 只会渲染新增的 items
     return candidates;
-  }, [messages, lastIsActiveAssistant]);
+  }, [messages, excludeFromStatic]);
 
   return (
     <Box flexDirection="column" width="100%">
@@ -466,7 +487,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
             )}
           </>
         )}
-        {isGenerating && !activeMessage && (
+        {isGenerating && !activeMessage && !activeHidden && (
           <>
             {streamingParts.length > 0 ? (
               <MessageItem
