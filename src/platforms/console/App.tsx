@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, Text, Static, useInput, useStdout } from 'ink';
 import { UsageMetadata } from '../../types';
+import type { LLMModelInfo } from '../../llm/router';
 import Gradient from 'ink-gradient';
 import { ToolInvocation } from '../../types';
 import { SessionMeta } from '../../storage/base';
@@ -112,13 +113,8 @@ export interface AppHandle {
   finalizeResponse(durationMs: number): void;
 }
 
-interface ModelCommandResult {
-  message: string;
-  modelId?: string;
-  modelName?: string;
-  contextWindow?: number;
-}
-
+/** 模型切换结果 */
+interface SwitchModelResult { ok: boolean; message: string; modelId?: string; modelName?: string; contextWindow?: number; }
 interface AppProps {
   onReady: (handle: AppHandle) => void;
   onSubmit: (text: string) => void;
@@ -126,7 +122,8 @@ interface AppProps {
   onLoadSession: (id: string) => Promise<void>;
   onListSessions: () => Promise<SessionMeta[]>;
   onRunCommand: (cmd: string) => { output: string; cwd: string };
-  onModelCommand: (text: string) => ModelCommandResult;
+  onListModels: () => LLMModelInfo[];
+  onSwitchModel: (modelName: string) => SwitchModelResult;
   onLoadSettings: () => Promise<ConsoleSettingsSnapshot>;
   onSaveSettings: (snapshot: ConsoleSettingsSnapshot) => Promise<ConsoleSettingsSaveResult>;
   onExit: () => void;
@@ -137,9 +134,9 @@ interface AppProps {
 }
 
 /** 视图模式 */
-type ViewMode = 'chat' | 'session-list' | 'settings';
+type ViewMode = 'chat' | 'session-list' | 'model-list' | 'settings';
 
-export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSessions, onRunCommand, onModelCommand, onLoadSettings, onSaveSettings, onExit, modeName, modelId, modelName, contextWindow }: AppProps) {
+export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSessions, onRunCommand, onListModels, onSwitchModel, onLoadSettings, onSaveSettings, onExit, modeName, modelId, modelName, contextWindow }: AppProps) {
   const [messages, setMessages] =useState<ChatMessage[]>([]);
   const [streamingParts, setStreamingParts] = useState<MessagePart[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -153,6 +150,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   const [sessionList, setSessionList] = useState<SessionMeta[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [settingsInitialSection, setSettingsInitialSection] = useState<'general' | 'mcp'>('general');
+  const [modelList, setModelList] = useState<LLMModelInfo[]>([]);
   const { stdout } = useStdout();
 
   const streamPartsRef = useRef<MessagePart[]>([]);
@@ -343,14 +341,25 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
       return;
     }
     if (text.startsWith('/model')) {
-      const result = onModelCommand(text);
-      if (result.modelId) setCurrentModelId(result.modelId);
-      if (result.modelName) setCurrentModelName(result.modelName);
-      if ('contextWindow' in result) setCurrentContextWindow(result.contextWindow);
-      setMessages((prev: ChatMessage[]) => [
-        ...prev,
-        { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.message }] },
-      ]);
+      const arg = text.slice('/model'.length).trim();
+      if (!arg) {
+        // 无参数：打开模型选择列表
+        const models = onListModels();
+        setModelList(models);
+        const currentIdx = models.findIndex(m => m.current);
+        setSelectedIndex(currentIdx >= 0 ? currentIdx : 0);
+        setViewMode('model-list');
+      } else {
+        // 有参数：直接切换
+        const result = onSwitchModel(arg);
+        if (result.modelId) setCurrentModelId(result.modelId);
+        if (result.modelName) setCurrentModelName(result.modelName);
+        if ('contextWindow' in result) setCurrentContextWindow(result.contextWindow);
+        setMessages((prev: ChatMessage[]) => [
+          ...prev,
+          { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.message }] },
+        ]);
+      }
       return;
     }
     if (text.startsWith('/sh ') || text === '/sh') {
@@ -366,7 +375,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
       return;
     }
     onSubmit(text);
-  }, [onSubmit, onNewSession, onListSessions, onRunCommand, onModelCommand, onExit]);
+  }, [onSubmit, onNewSession, onListSessions, onRunCommand, onListModels, onSwitchModel, onExit]);
 
   // ============ 键盘输入 ============
 
@@ -392,6 +401,25 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
       }
       return;
     }
+    if (viewMode === 'model-list') {
+      if (key.upArrow) {
+        setSelectedIndex((prev: number) => Math.max(0, prev - 1));
+      } else if (key.downArrow) {
+        setSelectedIndex((prev: number) => Math.min(modelList.length - 1, prev + 1));
+      } else if (key.return) {
+        const selected = modelList[selectedIndex];
+        if (selected) {
+          const result = onSwitchModel(selected.modelName);
+          if (result.modelId) setCurrentModelId(result.modelId);
+          if (result.modelName) setCurrentModelName(result.modelName);
+          if ('contextWindow' in result) setCurrentContextWindow(result.contextWindow);
+          setViewMode('chat');
+        }
+      } else if (key.escape) {
+        setViewMode('chat');
+      }
+      return;
+    }
     if (key.escape) {
       onExit();
     }
@@ -399,8 +427,19 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
 
   const termWidth = stdout?.columns ?? 80;
 
-  // ============ 设置视图 ============
+  // ============ Static 消息列表（必须在所有条件 return 之前，保证 hooks 调用顺序一致） ============
 
+  const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+  const lastIsActiveAssistant = isGenerating && lastMsg?.role === 'assistant';
+  const excludeFromStatic = lastIsActiveAssistant || activeHidden;
+  const activeMessage = (lastIsActiveAssistant && !activeHidden) ? lastMsg : null;
+
+  const staticMessages = useMemo(() => {
+    const candidates = excludeFromStatic ? messages.slice(0, -1) : messages;
+    return candidates;
+  }, [messages, excludeFromStatic]);
+
+  // ============ 设置视图 ============
   if (viewMode === 'settings') {
     return (
       <SettingsView
@@ -454,21 +493,52 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
     );
   }
 
+  // ============ 模型列表视图 ============
+
+  if (viewMode === 'model-list') {
+    const maxNameLen = modelList.length > 0
+      ? Math.max(...modelList.map(m => m.modelName.length))
+      : 0;
+    return (
+      <Box flexDirection="column" width="100%">
+        <Box marginBottom={1}>
+          <Gradient name="atlas">
+            <Text bold italic>IRIS</Text>
+          </Gradient>
+        </Box>
+        <Box marginBottom={1}>
+          <Text bold>切换模型</Text>
+          <Text dimColor>  (↑↓ 选择, Enter 切换, Esc 返回)</Text>
+        </Box>
+        {modelList.length === 0 && (
+          <Text dimColor>  暂无可用模型</Text>
+        )}
+        {modelList.map((info: LLMModelInfo, i: number) => {
+          const isSelected = i === selectedIndex;
+          const marker = info.current ? '*' : ' ';
+          return (
+            <Box key={info.modelName} paddingLeft={1}>
+              <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                {isSelected ? '❯' : ' '}{marker}{' '}
+              </Text>
+              <Text color={isSelected ? 'cyan' : 'white'} bold={isSelected}>
+                {info.modelName.padEnd(maxNameLen)}
+              </Text>
+              <Text dimColor>  {info.modelId}</Text>
+              <Text dimColor>  {info.provider}</Text>
+            </Box>
+          );
+        })}
+        <Box marginTop={1}>
+          <Text wrap="truncate-end">
+            <Text dimColor>{'\u2500'.repeat(Math.max(3, termWidth - 6))}</Text>
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
   // ============ 对话视图 ============
-
-  const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-  // activeHidden 为 true 时，消息仍属于"活跃"（排除在 Static 外），但不在动态区渲染
-  const lastIsActiveAssistant = isGenerating && lastMsg?.role === 'assistant';  // 控制 Static 边界
-  const excludeFromStatic = lastIsActiveAssistant || activeHidden;             // Phase 1 期间也排除
-  const activeMessage = (lastIsActiveAssistant && !activeHidden) ? lastMsg : null;
-
-  // Static 需要稳定的 items 数组：只包含已经渲染过不会再变的消息
-  const staticMessages = useMemo(() => {
-    const candidates = excludeFromStatic ? messages.slice(0, -1) : messages;
-    // 过滤掉已被 <Static> 渲染过的（Ink 内部会去重），这里只需返回全量即可
-    // Ink 的 <Static> 只会渲染新增的 items
-    return candidates;
-  }, [messages, excludeFromStatic]);
 
   return (
     <Box flexDirection="column" width="100%">

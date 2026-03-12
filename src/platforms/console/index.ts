@@ -15,6 +15,7 @@ import type { MCPManager } from '../../mcp';
 import { App, AppHandle, MessageMeta } from './App';
 import { MessagePart } from './components/MessageItem';
 import { ConsoleSettingsController, ConsoleSettingsSaveResult, ConsoleSettingsSnapshot } from './settings';
+import type { LLMModelInfo } from '../../llm/router';
 
 function createToolInvocationFromFunctionCall(part: any, index: number, status: ToolStatus): ToolInvocation {
   return {
@@ -76,23 +77,6 @@ function generateSessionId(): string {
     + String(now.getSeconds()).padStart(2, '0');
   const rand = Math.random().toString(36).slice(2, 6);
   return `${ts}_${rand}`;
-}
-
-function formatModelList(models: ReturnType<Backend['listModels']>): string {
-  if (models.length === 0) {
-    return '当前没有可用模型。';
-  }
-
-  const maxNameLength = Math.max(...models.map(model => model.modelName.length));
-  const lines = ['可用模型：', '', `  ${'name'.padEnd(maxNameLength)}  模型 ID`];
-
-  for (const model of models) {
-    const marker = model.current ? '*' : ' ';
-    lines.push(`${marker} ${model.modelName.padEnd(maxNameLength)}  ${model.modelId}`);
-  }
-
-  lines.push('', '其中 * 表示当前活动模型。', '使用 /model <modelName> 切换当前模型。');
-  return lines.join('\n');
 }
 
 export interface ConsolePlatformOptions {
@@ -207,7 +191,8 @@ export class ConsolePlatform extends PlatformAdapter {
         onLoadSession: (id: string) => this.handleLoadSession(id),
         onListSessions: () => this.handleListSessions(),
         onRunCommand: (cmd: string) => this.handleRunCommand(cmd),
-        onModelCommand: (text: string) => this.handleModelCommand(text),
+        onListModels: () => this.handleListModels(),
+        onSwitchModel: (modelName: string) => this.handleSwitchModel(modelName),
         onLoadSettings: () => this.handleLoadSettings(),
         onSaveSettings: (snapshot: ConsoleSettingsSnapshot) => this.handleSaveSettings(snapshot),
         onExit: () => this.stop(),
@@ -245,28 +230,18 @@ export class ConsolePlatform extends PlatformAdapter {
     return this.backend.runCommand(cmd);
   }
 
-  private handleModelCommand(text: string): { message: string; modelId?: string; modelName?: string; contextWindow?: number } {
-    const nextModelName = text.slice('/model'.length).trim();
+  private handleListModels(): LLMModelInfo[] {
+    return this.backend.listModels();
+  }
 
-    if (!nextModelName) {
-      const current = this.backend.getCurrentModelInfo();
-      this.modelName = current.modelName;
-      this.modelId = current.modelId;
-      this.contextWindow = current.contextWindow;
-      return {
-        message: formatModelList(this.backend.listModels()),
-        modelName: current.modelName,
-        modelId: current.modelId,
-        contextWindow: current.contextWindow,
-      };
-    }
-
+  private handleSwitchModel(modelName: string): { ok: boolean; message: string; modelId?: string; modelName?: string; contextWindow?: number } {
     try {
-      const info = this.backend.switchModel(nextModelName);
+      const info = this.backend.switchModel(modelName);
       this.modelName = info.modelName;
       this.modelId = info.modelId;
       this.contextWindow = info.contextWindow;
       return {
+        ok: true,
         message: `当前模型已切换为：${info.modelName}  ${info.modelId}`,
         modelName: info.modelName,
         modelId: info.modelId,
@@ -274,12 +249,7 @@ export class ConsolePlatform extends PlatformAdapter {
       };
     } catch (err: unknown) {
       const detail = err instanceof Error ? err.message : String(err);
-      return {
-        message: `切换模型失败：${detail}\n\n${formatModelList(this.backend.listModels())}`,
-        modelName: this.modelName,
-        modelId: this.modelId,
-        contextWindow: this.contextWindow,
-      };
+      return { ok: false, message: `切换模型失败：${detail}` };
     }
   }
 
