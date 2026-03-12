@@ -69,6 +69,19 @@ function appendMergedPart(parts: Part[], nextPart: Part, now: number, thoughtTim
       // 如果新 part 有签名且与上一个不同，则不合并，以保留位置
       const lastSigs = JSON.stringify(lastPart.thoughtSignatures || {});
       const nextSigs = JSON.stringify(normalizedPart.thoughtSignatures || {});
+      const isSignatureOnlyPart = !normalizedPart.text && nextSigs !== '{}';
+
+      // 流式结束时如果补来一个“仅签名”块，则回填到上一段同类型文本，避免丢签名或产生空白块
+      if (isSignatureOnlyPart && lastSigs === '{}') {
+        lastPart.thoughtSignatures = {
+          ...(lastPart.thoughtSignatures || {}),
+          ...(normalizedPart.thoughtSignatures || {}),
+        };
+        if (normalizedPart.thoughtDurationMs != null) {
+          lastPart.thoughtDurationMs = normalizedPart.thoughtDurationMs;
+        }
+        return lastPart;
+      }
 
       // 只有在签名一致，或者新块没有签名时才合并
       if (nextSigs === '{}' || lastSigs === nextSigs) {

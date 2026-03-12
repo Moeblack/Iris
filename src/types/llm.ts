@@ -56,6 +56,7 @@ export interface LLMStreamChunk {
   thoughtSignatures?: {
     gemini?: string;
     claude?: string;
+    openai?: string;
     [key: string]: string | undefined;
   };
 }

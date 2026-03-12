@@ -14,6 +14,7 @@ export interface TextPart {
   thoughtSignatures?: {
     gemini?: string;
     claude?: string;
+    openai?: string;
     [key: string]: string | undefined;
   };
   /** 连续 thought 片段的累计耗时（毫秒） */

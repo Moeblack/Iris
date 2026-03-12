@@ -1,13 +1,13 @@
 /**
  * OpenAI Responses 格式适配器
- * 
+ *
  * 专门处理 /v1/responses 接口。
  * 支持 reasoning summary 存储为 thought parts，
  * 支持 encrypted_content 存储为 thoughtSignatures.openai 并回传。
  */
 
 import {
-  LLMRequest, LLMResponse, LLMStreamChunk, Part,
+  LLMRequest, LLMResponse, LLMStreamChunk, Part, FunctionCallPart,
   isVisibleTextPart, isInlineDataPart, isFunctionCallPart, isFunctionResponsePart, isTextPart,
 } from '../../types';
 import { FormatAdapter, StreamDecodeState } from './types';
@@ -20,7 +20,8 @@ export class OpenAIResponsesFormat implements FormatAdapter {
   encodeRequest(request: LLMRequest, stream?: boolean): unknown {
     const body: Record<string, any> = {
       model: this.model,
-      store: false, // 强制 stateless 以支持 encrypted_content 回传
+      store: false,
+      contains: ['reasoning.encrypted_content'],
     };
 
     // 1. systemInstruction -> instructions
@@ -41,7 +42,6 @@ export class OpenAIResponsesFormat implements FormatAdapter {
 
         for (const part of content.parts) {
           if (isTextPart(part) && part.thought === true) {
-            // 思考块 -> reasoning item
             const reasoningItem: any = { type: 'reasoning' };
             if (part.text) {
               reasoningItem.summary = [{ type: 'summary_text', text: part.text }];
@@ -50,35 +50,34 @@ export class OpenAIResponsesFormat implements FormatAdapter {
               reasoningItem.encrypted_content = part.thoughtSignatures.openai;
             }
             inputItems.push(reasoningItem);
-            currentMessageItem = null; // 切换类型，重置当前消息项
+            currentMessageItem = null;
           } else if (isVisibleTextPart(part) && part.text) {
-            // 普通文本 -> message item 的 content
             if (!currentMessageItem) {
               currentMessageItem = { type: 'message', role: 'assistant', content: [] };
               inputItems.push(currentMessageItem);
             }
             currentMessageItem.content.push({ type: 'output_text', text: part.text });
           } else if (isFunctionCallPart(part)) {
-            // 工具调用 -> function_call item
             inputItems.push({
               id: `call_${toolUseIdCounter++}`,
               type: 'function_call',
               name: part.functionCall.name,
-              arguments: JSON.stringify(part.functionCall.args)
+              arguments: JSON.stringify(part.functionCall.args),
             });
             currentMessageItem = null;
           }
         }
       } else {
-        // user / tool role
         const funcRespParts = content.parts.filter(isFunctionResponsePart);
         if (funcRespParts.length > 0) {
-          for (const part of funcRespParts) {
+          const firstCallIndex = toolUseIdCounter - funcRespParts.length;
+          for (let i = 0; i < funcRespParts.length; i++) {
+            const part = funcRespParts[i];
             if (!isFunctionResponsePart(part)) continue;
             inputItems.push({
               type: 'function_call_output',
-              call_id: `call_${toolUseIdCounter - funcRespParts.length + inputItems.filter(i => i.type === 'function_call_output').length}`,
-              output: JSON.stringify(part.functionResponse.response)
+              call_id: `call_${firstCallIndex + i}`,
+              output: JSON.stringify(part.functionResponse.response),
             });
           }
         } else {
@@ -112,7 +111,7 @@ export class OpenAIResponsesFormat implements FormatAdapter {
         type: 'function',
         name: decl.name,
         description: decl.description,
-        parameters: decl.parameters
+        parameters: decl.parameters,
       }));
     }
 
@@ -122,8 +121,6 @@ export class OpenAIResponsesFormat implements FormatAdapter {
       if (gc.maxOutputTokens !== undefined) body.max_output_tokens = gc.maxOutputTokens;
       if (gc.temperature !== undefined) body.temperature = gc.temperature;
       if (gc.topP !== undefined) body.top_p = gc.topP;
-      // 启用推理签名回传声明
-      body.contains = ['reasoning.encrypted_content'];
     }
 
     if (stream) body.stream = true;
@@ -142,29 +139,16 @@ export class OpenAIResponsesFormat implements FormatAdapter {
     const parts: Part[] = [];
     for (const item of data.output) {
       if (item.type === 'reasoning') {
-        const part: any = { thought: true };
-        // 提取摘要文本
-        if (item.summary) {
-          part.text = item.summary.map((s: any) => s.text).join('\n');
-        }
-        // 提取加密签名
-        if (item.encrypted_content) {
-          part.thoughtSignatures = { openai: item.encrypted_content };
-        }
-        parts.push(part);
+        const part = createReasoningPart(item, { includeText: true, includeSignature: true });
+        if (part) parts.push(part);
       } else if (item.type === 'message') {
-        for (const block of item.content) {
+        for (const block of item.content ?? []) {
           if (block.type === 'output_text') {
             parts.push({ text: block.text });
           }
         }
       } else if (item.type === 'function_call') {
-        parts.push({
-          functionCall: { 
-            name: item.name, 
-            args: typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments 
-          }
-        });
+        parts.push(createFunctionCallPart(item));
       }
     }
 
@@ -185,33 +169,40 @@ export class OpenAIResponsesFormat implements FormatAdapter {
   decodeStreamChunk(raw: unknown, state: StreamDecodeState): LLMStreamChunk {
     const data = raw as any;
     const chunk: LLMStreamChunk = {};
-
-    // OpenAI Responses SSE 包含多种事件：response.output_text.delta, response.output_item.added 等
-    // 这里的 data.type 是 SSE 的事件名，但在 JSON parse 之后通常是 chunk 内容
-    // 假设传输层已经将 SSE 事件分发为 JSON 块
-    
-    const event = data.event || data.type; // 取决于 transport 层如何透传
+    const streamState = state as OpenAIResponsesStreamState;
+    const event = data.event || data.type;
 
     if (event === 'response.output_text.delta') {
-      chunk.textDelta = data.delta;
-      chunk.partsDelta = [{ text: data.delta }];
+      if (data.delta) {
+        chunk.textDelta = data.delta;
+        chunk.partsDelta = [{ text: data.delta }];
+      }
     } else if (event === 'response.output_item.added') {
       const item = data.item;
-      if (item.type === 'reasoning') {
-        const part: any = { thought: true };
-        if (item.summary) part.text = item.summary.map((s: any) => s.text).join('\n');
-        if (item.encrypted_content) {
-          part.thoughtSignatures = { openai: item.encrypted_content };
-          chunk.thoughtSignatures = { openai: item.encrypted_content };
+      if (item?.type === 'reasoning') {
+        const part = createReasoningPart(item, { includeText: true, includeSignature: true });
+        if (part) {
+          chunk.partsDelta = [part];
+          if ('thoughtSignatures' in part && part.thoughtSignatures) {
+            chunk.thoughtSignatures = { ...part.thoughtSignatures };
+          }
         }
-        chunk.partsDelta = [part];
+      } else if (item?.type === 'function_call') {
+        emitFunctionCallChunk(chunk, item, streamState);
       }
     } else if (event === 'response.output_item.done') {
-        // Item 完成时的最终数据
-        const item = data.item;
-        if (item.type === 'reasoning' && item.encrypted_content) {
-            chunk.thoughtSignatures = { openai: item.encrypted_content };
+      const item = data.item;
+      if (item?.type === 'reasoning' && item.encrypted_content) {
+        const part = createReasoningPart(item, { includeText: false, includeSignature: true });
+        if (part) {
+          chunk.partsDelta = [part];
+          if ('thoughtSignatures' in part && part.thoughtSignatures) {
+            chunk.thoughtSignatures = { ...part.thoughtSignatures };
+          }
         }
+      } else if (item?.type === 'function_call') {
+        emitFunctionCallChunk(chunk, item, streamState);
+      }
     } else if (event === 'response.completed') {
       if (data.usage) {
         chunk.usageMetadata = {
@@ -226,10 +217,83 @@ export class OpenAIResponsesFormat implements FormatAdapter {
   }
 
   createStreamState(): StreamDecodeState {
-    return stateFactory();
+    return {
+      emittedFunctionCallIds: new Set<string>(),
+    } as OpenAIResponsesStreamState;
   }
 }
 
-function stateFactory(): StreamDecodeState {
+interface OpenAIResponsesStreamState extends StreamDecodeState {
+  emittedFunctionCallIds: Set<string>;
+}
+
+function createReasoningPart(
+  item: any,
+  options: { includeText: boolean; includeSignature: boolean },
+): Part | undefined {
+  const part: any = { thought: true };
+
+  if (options.includeText) {
+    const text = extractReasoningSummaryText(item.summary);
+    if (text) part.text = text;
+  }
+
+  if (options.includeSignature && item.encrypted_content) {
+    part.thoughtSignatures = { openai: item.encrypted_content };
+  }
+
+  return part.text || part.thoughtSignatures ? part : undefined;
+}
+
+function extractReasoningSummaryText(summary: unknown): string {
+  if (!Array.isArray(summary)) return '';
+  return summary
+    .map(item => (item && typeof item === 'object' && 'text' in item ? (item as any).text : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function createFunctionCallPart(item: any): FunctionCallPart {
+  return {
+    functionCall: {
+      name: item.name,
+      args: parseFunctionCallArguments(item.arguments),
+    },
+  };
+}
+
+function parseFunctionCallArguments(argumentsValue: unknown): Record<string, unknown> {
+  if (!argumentsValue) return {};
+  if (typeof argumentsValue === 'string') {
+    return JSON.parse(argumentsValue);
+  }
+  if (typeof argumentsValue === 'object' && !Array.isArray(argumentsValue)) {
+    return argumentsValue as Record<string, unknown>;
+  }
   return {};
+}
+
+function emitFunctionCallChunk(
+  chunk: LLMStreamChunk,
+  item: any,
+  state: OpenAIResponsesStreamState,
+): void {
+  const functionCall = tryCreateFunctionCallPart(item);
+  if (!functionCall) return;
+
+  const itemId = String(item.id ?? `${item.name}:${JSON.stringify(item.arguments ?? {})}`);
+  if (state.emittedFunctionCallIds.has(itemId)) return;
+  state.emittedFunctionCallIds.add(itemId);
+
+  chunk.functionCalls = [...(chunk.functionCalls ?? []), functionCall];
+  chunk.partsDelta = [...(chunk.partsDelta ?? []), functionCall];
+}
+
+function tryCreateFunctionCallPart(item: any): FunctionCallPart | undefined {
+  if (item.arguments === undefined) return undefined;
+  try {
+    return createFunctionCallPart(item);
+  } catch {
+    return undefined;
+  }
 }
