@@ -6,6 +6,7 @@
 
 import React from 'react';
 import { render, Instance } from 'ink';
+import ansiEscapes from 'ansi-escapes';
 import { PlatformAdapter } from '../base';
 import { Backend } from '../../core/backend';
 import { SessionMeta } from '../../storage/base';
@@ -100,6 +101,8 @@ export class ConsolePlatform extends PlatformAdapter {
   private inkInstance?: Instance;
   private appHandle?: AppHandle;
 
+
+
   /** 当前响应周期内的工具调用 ID 集合 */
   private currentToolIds = new Set<string>();
 
@@ -181,6 +184,13 @@ export class ConsolePlatform extends PlatformAdapter {
 
     // 渲染 TUI
     return new Promise<void>((resolve) => {
+      // 启动时先清屏（仅当前视口），避免上一次运行残留内容影响布局。
+      try {
+        process.stdout.write(ansiEscapes.clearViewport);
+      } catch {
+        // 忽略清屏失败
+      }
+
       const element = React.createElement(App, {
         onReady: (handle: AppHandle) => {
           this.appHandle = handle;

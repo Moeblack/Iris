@@ -151,6 +151,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [settingsInitialSection, setSettingsInitialSection] = useState<'general' | 'mcp'>('general');
   const [modelList, setModelList] = useState<LLMModelInfo[]>([]);
+  const [resizeTick, setResizeTick] = useState(0);
   const { stdout } = useStdout();
 
   const streamPartsRef = useRef<MessagePart[]>([]);
@@ -159,6 +160,20 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
   const pendingCommittedStreamPartsRef = useRef(0);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUsageRef = useRef<UsageMetadata | null>(null);
+
+  // 监听终端 resize：触发 React 重渲染。
+  // Ink 自己会在 resize 时重新计算布局并调用 onRender，但不会触发组件函数重新执行。
+  // 对于依赖 stdout.columns 的渲染（例如分隔线宽度、输入框折行），需要一个状态变化来刷新。
+  useEffect(() => {
+    if (!stdout) return;
+    const handler = () => {
+      setResizeTick(prev => prev + 1);
+    };
+    stdout.on('resize', handler);
+    return () => {
+      stdout.off('resize', handler);
+    };
+  }, [stdout]);
 
   useEffect(() => {
     const handle: AppHandle = {
@@ -471,16 +486,15 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
         {sessionList.map((meta: SessionMeta, i: number) => {
           const isSelected = i === selectedIndex;
           const time = new Date(meta.updatedAt).toLocaleString('zh-CN');
+          const marker = isSelected ? '❯' : ' ';
+          const line = `${meta.title}  ${meta.cwd}  ${time}`;
+          // 预截断，避免终端自动折行导致 Ink 清理行数不准。
+          const maxWidth = Math.max(0, termWidth - 4);
+          const display = line.length > maxWidth ? line.slice(0, Math.max(0, maxWidth - 1)) : line;
           return (
             <Box key={meta.id} paddingLeft={1}>
-              <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
-                {isSelected ? '❯ ' : '  '}
-              </Text>
-              <Text color={isSelected ? 'cyan' : 'white'} bold={isSelected}>
-                {meta.title.slice(0, 40)}
-              </Text>
-              <Text dimColor>  {meta.cwd}</Text>
-              <Text dimColor>  {time}</Text>
+              <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>{marker} </Text>
+              <Text wrap="truncate-end" color={isSelected ? 'cyan' : 'white'} bold={isSelected}>{display}</Text>
             </Box>
           );
         })}
@@ -515,17 +529,15 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
         )}
         {modelList.map((info: LLMModelInfo, i: number) => {
           const isSelected = i === selectedIndex;
-          const marker = info.current ? '*' : ' ';
+          const currentMarker = info.current ? '*' : ' ';
+          const marker = isSelected ? '❯' : ' ';
+          const line = `${currentMarker} ${info.modelName}  ${info.modelId}  ${info.provider}`;
+          const maxWidth = Math.max(0, termWidth - 4);
+          const display = line.length > maxWidth ? line.slice(0, Math.max(0, maxWidth - 1)) : line;
           return (
             <Box key={info.modelName} paddingLeft={1}>
-              <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
-                {isSelected ? '❯' : ' '}{marker}{' '}
-              </Text>
-              <Text color={isSelected ? 'cyan' : 'white'} bold={isSelected}>
-                {info.modelName.padEnd(maxNameLen)}
-              </Text>
-              <Text dimColor>  {info.modelId}</Text>
-              <Text dimColor>  {info.provider}</Text>
+              <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>{marker} </Text>
+              <Text wrap="truncate-end" color={isSelected ? 'cyan' : 'white'} bold={isSelected}>{display}</Text>
             </Box>
           );
         })}
@@ -601,7 +613,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
         <Text wrap="truncate-end">
           <Text dimColor>{'\u2500'.repeat(Math.max(3, termWidth - 6))}</Text>
         </Text>
-        <Text dimColor>
+        <Text wrap="truncate-end" dimColor>
           {'MODEL: '}{currentModelName}
           {currentModelId ? ` (${currentModelId})` : ''}
           {'  '}
@@ -614,7 +626,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
             : ''
           }
         </Text>
-        <Text dimColor>{process.cwd()}</Text>
+        <Text wrap="truncate-end" dimColor>{process.cwd()}{resizeTick % 2 === 0 ? '' : '\u200B'}</Text>
         <InputBar disabled={isGenerating} onSubmit={handleSubmit} />
       </Box>
     </Box>
