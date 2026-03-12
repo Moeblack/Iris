@@ -32,6 +32,7 @@ import { ToolStateManager } from './tools/state';
 import { readFile } from './tools/internal/read_file';
 import { searchInFiles } from './tools/internal/search_in_files';
 import { shell } from './tools/internal/shell';
+import { findFiles } from './tools/internal/find_files';
 import { applyDiff } from './tools/internal/apply_diff';
 import { writeFile } from './tools/internal/write_file';
 import { listFiles } from './tools/internal/list_files';
@@ -90,7 +91,7 @@ async function main() {
 
   // ---- 3. 注册工具 ----
   const tools = new ToolRegistry();
-  tools.registerAll([readFile, writeFile, applyDiff, searchInFiles, shell, listFiles, deleteFile, createDirectory, insertCode, deleteCode]);
+  tools.registerAll([readFile, writeFile, applyDiff, searchInFiles, findFiles, shell, listFiles, deleteFile, createDirectory, insertCode, deleteCode]);
   if (memory) {
     const { createMemoryTools } = await import('./memory');
     tools.registerAll(createMemoryTools(memory));

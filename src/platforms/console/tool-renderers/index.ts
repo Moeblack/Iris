@@ -12,12 +12,14 @@ import { ShellRenderer } from './shell';
 import { ReadFileRenderer } from './read-file';
 import { ApplyDiffRenderer } from './apply-diff';
 import { SearchInFilesRenderer } from './search-in-files';
+import { FindFilesRenderer } from './find-files';
 
 const renderers: Record<string, FC<ToolRendererProps>> = {
   shell: ShellRenderer,
   read_file: ReadFileRenderer,
   apply_diff: ApplyDiffRenderer,
   search_in_files: SearchInFilesRenderer,
+  find_files: FindFilesRenderer,
 };
 
 export function getToolRenderer(toolName: string): FC<ToolRendererProps> {

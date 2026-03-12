@@ -62,6 +62,7 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 | （已移除） | `example.ts` | 示例工具已移除 |
 | `read_file` | `read-file.ts` | 读取文本文件，返回带行号内容，支持指定行范围 |
 | `search_in_files` | `search-in-files.ts` | 在目录或文件中搜索/替换内容，支持正则表达式 |
+| `find_files` | `find-files.ts` | 基于 glob 模式查找文件 |
 | `apply_diff` | `apply-diff.ts` | 应用 unified diff 补丁，支持多 hunk |
 | `shell` | `shell.ts` | 执行 Shell 命令，支持超时和工作目录 |
 | `memory_search` | 由 `memory/tools.ts` 动态创建 | 搜索长期记忆 |

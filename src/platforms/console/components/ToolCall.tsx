@@ -31,6 +31,11 @@ function getArgsSummary(toolName: string, args: Record<string, unknown>): string
       const head = q.length > 20 ? `"${q.slice(0, 20)}\u2026"` : `"${q}"`;
       return p ? `${head} in ${p}` : head;
     }
+    case 'find_files': {
+      const patterns = Array.isArray(args.patterns) ? (args.patterns as unknown[]).map(String) : [];
+      const first = patterns[0] ?? '';
+      return first ? `"${first}"` : '';
+    }
     default:
       return '';
   }
