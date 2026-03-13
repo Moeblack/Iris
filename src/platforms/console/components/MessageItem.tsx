@@ -1,5 +1,8 @@
 /**
  * 单条消息渲染 - 基于有序 parts 模型
+ *
+ * 使用 Ink Box 的 borderLeft 实现左侧边条，
+ * 自动贯穿所有内容行。
  */
 
 import React from 'react';
@@ -58,7 +61,6 @@ interface MessageItemProps {
   isStreaming?: boolean;
 }
 
-const PIPE = '│';
 const CIRCLE_OPEN = '○';
 const CIRCLE_FILL = '●';
 
@@ -88,59 +90,58 @@ export const MessageItem = React.memo(function MessageItem(
         <Text bold color="black" backgroundColor={themeColor}>{` ${labelText} `}</Text>
       </Box>
 
-      {/* 按顺序渲染每个 part */}
-      {displayParts.map((part, i) => {
-        if (part.type === 'text' && part.text.length > 0) {
-          const isLastPart = i === displayParts.length - 1;
-          return (
-            <Box key={i} paddingLeft={0} width="100%">
-              <Text dimColor color={themeColor}>{PIPE} </Text>
-              <Box flexGrow={1} width="100%">
-                <MarkdownText
-                  text={part.text}
-                  showCursor={isLastPart && isStreaming}
-                />
-              </Box>
-            </Box>
-          );
-        }
-        if (part.type === 'thought') {
-          const previewText = getThoughtTailPreview(part.text, Math.max(24, (stdout?.columns ?? 80) - 20));
-          const isLastPart = i === displayParts.length - 1;
-          const prefix = part.durationMs != null ? `[THINKING ${formatElapsedMs(part.durationMs)}]` : '[THINKING]';
-          return (
-            <Box key={i} paddingLeft={0} width="100%">
-              <Text dimColor color={themeColor}>{PIPE} </Text>
-              <Box flexGrow={1} width="100%">
-                <Text wrap="truncate-end" italic>
-                  <Text bold italic color="gray">{prefix}</Text>
-                  {previewText ? <Text dimColor italic> {previewText}</Text> : null}
-                  {isLastPart && isStreaming && <Text backgroundColor="gray"> </Text>}
-                </Text>
-              </Box>
-            </Box>
-          );
-        }
-        if (part.type === 'tool_use') {
-          return (
-            <Box key={i} flexDirection="column" width="100%">
-              <Text>
-                <Text dimColor color={themeColor}>{PIPE} </Text>
-                <Text bold color="gray">[TOOL_USE]</Text>
+      {/* 内容区域 — 左侧边条自动贯穿所有行 */}
+      <Box
+        flexDirection="column"
+        width="100%"
+        borderStyle="bold"
+        borderLeft
+        borderRight={false}
+        borderTop={false}
+        borderBottom={false}
+        borderColor={themeColor}
+        borderDimColor
+        paddingLeft={1}
+      >
+        {/* 按顺序渲染每个 part */}
+        {displayParts.map((part, i) => {
+          if (part.type === 'text' && part.text.length > 0) {
+            const isLastPart = i === displayParts.length - 1;
+            return (
+              <MarkdownText
+                key={i}
+                text={part.text}
+                showCursor={isLastPart && isStreaming}
+              />
+            );
+          }
+          if (part.type === 'thought') {
+            const previewText = getThoughtTailPreview(part.text, Math.max(24, (stdout?.columns ?? 80) - 20));
+            const isLastPart = i === displayParts.length - 1;
+            const prefix = part.durationMs != null ? `[THINKING ${formatElapsedMs(part.durationMs)}]` : '[THINKING]';
+            return (
+              <Text key={i} wrap="truncate-end" italic>
+                <Text bold italic color="gray">{prefix}</Text>
+                {previewText ? <Text dimColor italic> {previewText}</Text> : null}
+                {isLastPart && isStreaming && <Text backgroundColor="gray"> </Text>}
               </Text>
-              <Box flexDirection="column">
-                {part.tools.map(inv => <ToolCall key={inv.id} invocation={inv} lineColor={themeColor} />)}
+            );
+          }
+          if (part.type === 'tool_use') {
+            return (
+              <Box key={i} flexDirection="column" width="100%">
+                <Text bold color="gray">[TOOL_USE]</Text>
+                <Box flexDirection="column">
+                  {part.tools.map(inv => <ToolCall key={inv.id} invocation={inv} lineColor={themeColor} />)}
+                </Box>
               </Box>
-            </Box>
-          );
-        }
-        return null;
-      })}
+            );
+          }
+          return null;
+        })}
 
-      {/* assistant 消息的 token / 耗时信息 */}
-      {!isUser && !isStreaming && (msg.tokenIn != null || msg.durationMs != null) && (
-        <Box paddingLeft={0} width="100%">
-          <Text dimColor color={themeColor}>{PIPE} </Text>
+        {/* assistant 消息的 token / 耗时信息 */}
+        {!isUser && !isStreaming && (msg.tokenIn != null || msg.durationMs != null) && (
           <Text dimColor>
             {msg.tokenIn != null && `IN: ${msg.tokenIn.toLocaleString()}`}
             {msg.tokenIn != null && msg.tokenOut != null && '  '}
@@ -149,23 +150,18 @@ export const MessageItem = React.memo(function MessageItem(
             {msg.durationMs != null && `TIME: ${(msg.durationMs / 1000).toFixed(1)}s`}
             {msg.tokenOut != null && msg.streamOutputDurationMs != null && `   ${formatTokenSpeed(msg.tokenOut, msg.streamOutputDurationMs)}`}
           </Text>
-        </Box>
-      )}
+        )}
 
-      {/* 没有内容但正在流式生成 */}
-      {!hasAnyContent && isStreaming && (
-        <Box paddingLeft={0} width="100%">
-          <Text dimColor color={themeColor}>{PIPE} </Text>
+        {/* 没有内容但正在流式生成 */}
+        {!hasAnyContent && isStreaming && (
           <GeneratingTimer isGenerating={true} />
-        </Box>
-      )}
+        )}
 
-      {/* 没有内容也不在流式 */}
-      {!hasAnyContent && !isStreaming && !isUser && (
-        <Box paddingLeft={0} width="100%">
-          <Text dimColor color={themeColor}>{PIPE}</Text>
-        </Box>
-      )}
+        {/* 没有内容也不在流式 */}
+        {!hasAnyContent && !isStreaming && !isUser && (
+          <Text>{' '}</Text>
+        )}
+      </Box>
     </Box>
   );
 });

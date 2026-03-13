@@ -164,6 +164,23 @@ function renderBlock(
     case 'heading': {
       const t = token as Tokens.Heading;
       const color = HEADING_COLORS[t.depth] ?? 'white';
+
+      if (t.depth <= 2) {
+        // H1: ═══ 双线  H2: ─── 单线
+        const lineChar = t.depth === 1 ? '═' : '─';
+        const lineWidth = Math.max(displayWidth(unescape(t.text)), 4);
+        return (
+          <Box key={key} flexDirection="column">
+            <Text bold color={color} wrap="wrap">
+              {renderInline(t.tokens, `${key}.`)}
+              {cursor}
+            </Text>
+            <Text dimColor color={color}>{lineChar.repeat(lineWidth)}</Text>
+          </Box>
+        );
+      }
+
+      // H3+ 保持 # 前缀
       return (
         <Box key={key}>
           <Text bold color={color} wrap="wrap">
