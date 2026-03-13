@@ -106,8 +106,8 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
 
 // ============ REST ============
 
-export async function getSessions(): Promise<{ sessions: SessionSummary[] }> {
-  const res = await request('/api/sessions')
+export async function getSessions(signal?: AbortSignal): Promise<{ sessions: SessionSummary[] }> {
+  const res = await request('/api/sessions', { signal })
   return res.json()
 }
 

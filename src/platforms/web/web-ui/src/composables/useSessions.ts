@@ -20,17 +20,49 @@ const sessionsLoading = ref(false)
 /** 会话列表加载错误 */
 const sessionsError = ref('')
 
+/** 当前会话列表请求版本号，用于丢弃过期响应 */
+let loadVersion = 0
+
+/** 当前进行中的会话列表请求控制器 */
+let currentLoadController: AbortController | null = null
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException
+    ? error.name === 'AbortError'
+    : error instanceof Error && error.name === 'AbortError'
+}
+
+function abortCurrentLoad() {
+  if (currentLoadController) {
+    currentLoadController.abort()
+    currentLoadController = null
+  }
+}
+
 export function useSessions() {
   async function loadSessions() {
+    const version = ++loadVersion
+    abortCurrentLoad()
+
+    const controller = new AbortController()
+    currentLoadController = controller
     sessionsLoading.value = true
     sessionsError.value = ''
+
     try {
-      const data = await api.getSessions()
+      const data = await api.getSessions(controller.signal)
+      if (version !== loadVersion || controller.signal.aborted) return
       sessions.value = data.sessions || []
     } catch (err) {
+      if (version !== loadVersion || isAbortError(err)) return
       sessionsError.value = err instanceof Error ? err.message : '加载会话列表失败'
     } finally {
-      sessionsLoading.value = false
+      if (version === loadVersion) {
+        sessionsLoading.value = false
+        if (currentLoadController === controller) {
+          currentLoadController = null
+        }
+      }
     }
   }
 
