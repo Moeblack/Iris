@@ -808,6 +808,10 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         setEditorValue('');
         setStatus('已取消编辑', 'warning');
       }
+      // 兼容某些终端 Enter 发送 \r 而非 key.return
+      if (input === '\r') {
+        submitEditor();
+      }
       return;
     }
 
@@ -899,7 +903,7 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       return;
     }
 
-    if (key.return && selectedRow?.target) {
+    if ((key.return || input === '\r') && selectedRow?.target) {
       if (selectedRow.target.kind === 'action') {
         if (selectedRow.target.action === 'addMcp') {
           handleAddMcpServer();

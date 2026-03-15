@@ -143,16 +143,16 @@ export function InputBar({ disabled, onSubmit }: InputBarProps) {
     // ---- Ctrl+C ----
     if (key.ctrl && input === 'c') return;
 
-    // ---- Line Feed (\n): 换行（常见于 Ctrl+J；部分终端会把它当作独立键发送） ----
-    // Ink 在很多终端里无法区分 Shift+Enter，但通常可以收到 Ctrl+J（\n）。
-    if (input === '\n') {
-      insertNewLine();
+    // ---- Enter / Return：提交 ----
+    // 某些终端会将 Enter 发送为 \r 而非触发 key.return，需要统一处理。
+    if (key.return || input === '\r') {
+      doSubmit();
       return;
     }
 
-    // ---- Enter：提交 ----
-    if (key.return) {
-      doSubmit();
+    // ---- Line Feed (\n): 换行（Ctrl+J） ----
+    if (input === '\n') {
+      insertNewLine();
       return;
     }
 

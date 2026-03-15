@@ -388,7 +388,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
         setSelectedIndex((prev: number) => Math.max(0, prev - 1));
       } else if (key.downArrow) {
         setSelectedIndex((prev: number) => Math.min(sessionList.length - 1, prev + 1));
-      } else if (key.return) {
+      } else if (key.return || input === '\r') {
         const selected =sessionList[selectedIndex];
         if (selected) {
           setMessages([]);
@@ -413,7 +413,7 @@ export function App({ onReady, onSubmit, onNewSession, onLoadSession, onListSess
         setSelectedIndex((prev: number) => Math.max(0, prev - 1));
       } else if (key.downArrow) {
         setSelectedIndex((prev: number) => Math.min(modelList.length - 1, prev + 1));
-      } else if (key.return) {
+      } else if (key.return || input === '\r') {
         const selected = modelList[selectedIndex];
         if (selected) {
           const result = onSwitchModel(selected.modelName);
