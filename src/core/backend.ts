@@ -393,23 +393,13 @@ export class Backend extends EventEmitter {
     return this.storage.listSessions();
   }
 
-  /**
-   * 生成输入框快捷建议。
-   *
-   * 历史上这里固定使用名为 light 的轻量模型层级。
-   * 现在模型池名称已完全自定义，因此改为：
-   * 1. 优先使用名为 light 的模型（兼容旧习惯）
-   * 2. 若不存在，则回退到当前活动模型
-   */
+  /** 生成输入框快捷建议（使用当前活动模型） */
   async generateChatSuggestions(sessionId?: string | null): Promise<ChatSuggestion[]> {
     try {
-      const suggestionModelName = this.router.hasModel('light')
-        ? 'light'
-        : this.router.getCurrentModelName();
       const history = sessionId ? await this.storage.getHistory(sessionId) : [];
       const request: LLMRequest = {
         systemInstruction: {
-          parts: [{ text: '你是 Iris Web GUI 的快捷建议生成器。请只返回 JSON，不要 Markdown、不要解释、不要代码块。输出一个长度为 3 的数组，每个元素都包含 label 和 text 两个字段。label 用于按钮展示，控制在 4-8 个中文字符，必须写成动作短语，风格类似“继续推进”“梳理思路”“分析附件”“定位问题”“校验结果”“给出方案”，禁止直接截断 text 或写成完整问句；text 用于点击后直接发送，控制在 12-40 个中文字符。建议必须紧扣上下文、方向不同、可立即执行。' }],
+          parts: [{ text: '你是 Iris Web GUI 的快捷建议生成器。请只返回 JSON，不要 Markdown、不要解释、不要代码块。输出一个长度为 3 的数组，每个元素都包含 label 和 text 两个字段。label 用于按钮展示，控制在 4-8 个中文字符，必须写成动作短语，风格类似”继续推进””梳理思路””分析附件””定位问题””校验结果””给出方案”，禁止直接截断 text 或写成完整问句；text 用于点击后直接发送，控制在 12-40 个中文字符。建议必须紧扣上下文、方向不同、可立即执行。' }],
         },
         contents: [{ role: 'user', parts: [{ text: this.buildChatSuggestionPrompt(history) }] }],
         generationConfig: {
@@ -418,11 +408,7 @@ export class Backend extends EventEmitter {
         },
       };
 
-      if (suggestionModelName !== 'light') {
-        logger.debug(`快捷建议未配置 light 模型，回退使用当前模型: ${suggestionModelName}`);
-      }
-
-      const response = await this.router.chat(request, suggestionModelName);
+      const response = await this.router.chat(request);
       return ensureChatSuggestions(parseChatSuggestions(extractText(response.content.parts)));
     } catch (err) {
       logger.warn('生成聊天快捷建议失败:', err);
