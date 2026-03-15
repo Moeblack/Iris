@@ -4195,7 +4195,7 @@ select:focus-visible {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: var(--section-gap);
 }
 
 .settings-section-group > .settings-section {
@@ -4208,14 +4208,12 @@ select:focus-visible {
   color: var(--text-tertiary);
   font-size: 0.82rem;
   line-height: 1.6;
-  margin-bottom: 16px;
 }
 
 .section-group-connector {
   text-align: center;
   color: var(--text-tertiary);
   font-size: 0.8rem;
-  padding: 10px 0;
   opacity: 0.7;
 }
 
@@ -4226,7 +4224,6 @@ select:focus-visible {
   font-size: 0.85rem;
   border: 1px dashed rgba(var(--tint-rgb), 0.15);
   border-radius: var(--radius-md);
-  margin-bottom: 12px;
 }
 
 .empty-state-block p {
@@ -5825,6 +5822,15 @@ select:focus-visible {
   background: #f8faf9;
   border-color: rgba(17, 24, 39, 0.08);
   box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme="light"] .settings-section-group {
+  border-color: rgba(17, 24, 39, 0.08);
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme="light"] .empty-state-block {
+  border-color: rgba(17, 24, 39, 0.12);
 }
 
 :root[data-theme="light"] .tier-block {
