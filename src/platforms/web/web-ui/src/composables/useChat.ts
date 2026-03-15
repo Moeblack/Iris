@@ -38,11 +38,23 @@ const streamingText = ref('')
 /** 是否正在流式接收 */
 const isStreaming = ref(false)
 
+/** 流式思考累积文本 */
+const streamingThought = ref('')
+
+/** 流式思考耗时 */
+const streamingThoughtDurationMs = ref<number | undefined>()
+
 /** 尚未刷新到 UI 的流式增量，避免每个 chunk 都触发视图更新 */
 let pendingStreamingDelta = ''
 
 /** requestAnimationFrame id，用于合并高频流式刷新 */
 let scheduledStreamingFlushId: number | null = null
+
+/** 尚未刷新到 UI 的 thought 增量 */
+let pendingThoughtDelta = ''
+
+/** thought 增量的 rAF id */
+let scheduledThoughtFlushId: number | null = null
 
 function cancelScheduledStreamingFlush() {
   if (scheduledStreamingFlushId !== null && typeof window !== 'undefined') {
@@ -62,10 +74,28 @@ function getBufferedStreamingText(): string {
   return pendingStreamingDelta ? `${streamingText.value}${pendingStreamingDelta}` : streamingText.value
 }
 
+function cancelScheduledThoughtFlush() {
+  if (scheduledThoughtFlushId !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(scheduledThoughtFlushId)
+  }
+  scheduledThoughtFlushId = null
+}
+
+function flushPendingThoughtDelta() {
+  cancelScheduledThoughtFlush()
+  if (!pendingThoughtDelta) return
+  streamingThought.value += pendingThoughtDelta
+  pendingThoughtDelta = ''
+}
+
 function resetStreamingState() {
   cancelScheduledStreamingFlush()
   pendingStreamingDelta = ''
   streamingText.value = ''
+  cancelScheduledThoughtFlush()
+  pendingThoughtDelta = ''
+  streamingThought.value = ''
+  streamingThoughtDurationMs.value = undefined
   isStreaming.value = false
 }
 
@@ -83,6 +113,9 @@ let activeRequestSessionId: string | null = null
 
 /** 服务端回填新 sessionId 时，跳过一次 currentSessionId 变更触发的历史加载 */
 let suppressNextSessionLoadForId: string | null = null
+
+/** 非工具消息暂存，等 done 事件时再提交（避免流式被覆盖） */
+let deferredAssistantMessage: Message | null = null
 
 const { currentSessionId, loadSessions, markSessionStreaming, markSessionCompleted, clearSessionActivity } = useSessions()
 
@@ -104,6 +137,30 @@ function queueStreamingDelta(delta: string) {
   scheduledStreamingFlushId = window.requestAnimationFrame(() => {
     scheduledStreamingFlushId = null
     flushPendingStreamingDelta()
+  })
+}
+
+function queueThoughtDelta(delta: string, durationMs?: number) {
+  if (!delta) return
+
+  pendingThoughtDelta += delta
+  if (durationMs != null) {
+    streamingThoughtDurationMs.value = durationMs
+  }
+  if (!isStreaming.value) {
+    isStreaming.value = true
+  }
+
+  if (scheduledThoughtFlushId !== null) return
+
+  if (typeof window === 'undefined') {
+    flushPendingThoughtDelta()
+    return
+  }
+
+  scheduledThoughtFlushId = window.requestAnimationFrame(() => {
+    scheduledThoughtFlushId = null
+    flushPendingThoughtDelta()
   })
 }
 
@@ -267,6 +324,12 @@ export function useChat() {
       ? isStreaming.value
       : false
   })
+  const currentSessionStreamingThought = computed(() => {
+    return isCurrentViewBoundToActiveRequest() ? streamingThought.value : ''
+  })
+  const currentSessionStreamingThoughtDurationMs = computed(() => {
+    return isCurrentViewBoundToActiveRequest() ? streamingThoughtDurationMs.value : undefined
+  })
 
   async function reloadMessages() {
     if (sending.value) return
@@ -342,6 +405,7 @@ export function useChat() {
 
     sending.value = true
     resetStreamingState()
+    deferredAssistantMessage = null
     messagesError.value = ''
 
     // 立即显示用户消息
@@ -384,10 +448,15 @@ export function useChat() {
       onStreamStart() {
         if (isStale()) return
         receivedFinalAssistantPayload = false
+        deferredAssistantMessage = null
       },
       onDelta(delta) {
         if (isStale() || receivedFinalAssistantPayload) return
         queueStreamingDelta(delta)
+      },
+      onThoughtDelta(text, durationMs) {
+        if (isStale() || receivedFinalAssistantPayload) return
+        queueThoughtDelta(text, durationMs)
       },
       onMessage(fullText) {
         if (receivedFinalAssistantPayload || isStale()) return
@@ -397,16 +466,31 @@ export function useChat() {
       onAssistantContent(message) {
         if (isStale()) return
         receivedFinalAssistantPayload = true
-        requestNeedsHistoryRefresh = requestNeedsHistoryRefresh || hasToolParts(message)
-        commitStructuredAssistantMessage(message)
+        if (hasToolParts(message)) {
+          // 工具消息：立即提交（保持现有行为）
+          requestNeedsHistoryRefresh = true
+          commitStructuredAssistantMessage(message)
+        } else {
+          // 纯文本+思考：暂存，让流式继续显示，等 done 时提交
+          deferredAssistantMessage = message
+        }
       },
       onStreamEnd() {
         if (isStale()) return
         flushPendingStreamingDelta()
+        flushPendingThoughtDelta()
       },
       onDoneMeta(durationMs) {
         if (isStale() || !isCurrentViewBoundToActiveRequest()) return
-        // 将 durationMs 回填到最后一条 model 消息的 meta
+
+        // 如果有暂存的非工具消息，直接回填到它的 meta
+        if (deferredAssistantMessage) {
+          if (!deferredAssistantMessage.meta) deferredAssistantMessage.meta = {}
+          deferredAssistantMessage.meta.durationMs = durationMs
+          return
+        }
+
+        // 否则回填到 messages 中最后一条 model 消息
         for (let i = messages.value.length - 1; i >= 0; i--) {
           const msg = messages.value[i]
           if (msg.role === 'model') {
@@ -422,7 +506,14 @@ export function useChat() {
         const finishedSessionId = activeRequestSessionId
         const shouldKeepCompletedBadge = !!finishedSessionId && currentSessionId.value !== finishedSessionId
 
-        if (receivedFinalAssistantPayload) {
+        if (deferredAssistantMessage) {
+          // 非工具消息：流式已展示完毕，清空流式状态后提交完整消息（含 meta / thought 等结构）
+          resetStreamingState()
+          if (isCurrentViewBoundToActiveRequest()) {
+            messages.value.push(deferredAssistantMessage)
+          }
+          deferredAssistantMessage = null
+        } else if (receivedFinalAssistantPayload) {
           resetStreamingState()
         } else {
           flushStreaming(finishedSessionId)
@@ -445,6 +536,7 @@ export function useChat() {
 
         const failedSessionId = activeRequestSessionId
 
+        deferredAssistantMessage = null
         flushStreaming(failedSessionId)
         if (failedSessionId) {
           clearSessionActivity(failedSessionId)
@@ -573,6 +665,8 @@ export function useChat() {
     sending,
     streamingText: currentSessionStreamingText,
     isStreaming: currentSessionIsStreaming,
+    streamingThought: currentSessionStreamingThought,
+    streamingThoughtDurationMs: currentSessionStreamingThoughtDurationMs,
     armedDeleteMessageIndex,
     deletingMessageIndex,
     clearMessageActionError,

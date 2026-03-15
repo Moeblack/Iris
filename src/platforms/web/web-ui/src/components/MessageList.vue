@@ -215,6 +215,19 @@
         </div>
       </div>
 
+      <div
+        v-if="isStreaming && streamingThought"
+        class="message-stack message-stack-bubble message-stack-model"
+      >
+        <div class="message message-model message-thought-block expanded">
+          <div class="thought-header">
+            <span class="thought-label">思考过程</span>
+            <span v-if="streamingThoughtDurationMs != null" class="thought-duration">{{ formatThoughtDuration(streamingThoughtDurationMs) }}</span>
+          </div>
+          <div class="thought-content expanded">{{ streamingThought }}</div>
+        </div>
+      </div>
+
       <MessageBubble
         v-if="isStreaming && streamingText"
         role="model"
@@ -280,6 +293,8 @@ const props = defineProps<{
   sending: boolean
   streamingText: string
   isStreaming: boolean
+  streamingThought: string
+  streamingThoughtDurationMs: number | undefined
   actionsLocked: boolean
   armedDeleteMessageIndex: number | null
   deletingMessageIndex: number | null
@@ -303,7 +318,7 @@ const toolWorkflowStackEls = new Map<string, HTMLDivElement>()
 const toolWorkflowCollapseTimers = new Map<string, number>()
 
 const showThinkingBubble = computed(() => {
-  if (!props.sending || props.isStreaming || !!props.streamingText) return false
+  if (!props.sending || props.isStreaming || !!props.streamingText || !!props.streamingThought) return false
   const lastMessage = props.messages[props.messages.length - 1]
   return !lastMessage || lastMessage.role === 'user'
 })
@@ -470,7 +485,7 @@ function splitWorkflowNoteLines(text: string): string[] {
 }
 
 function isToolGroupRunning(key: string): boolean {
-  if (!props.sending || props.isStreaming || !!props.streamingText) {
+  if (!props.sending || props.isStreaming || !!props.streamingText || !!props.streamingThought) {
     return false
   }
 
@@ -582,7 +597,7 @@ function buildToolGroupMeta(entries: ToolGroupEntry[]): string {
 }
 
 function shouldShowToolGroupActions(item: DisplayToolGroupItem): boolean {
-  if (props.actionsLocked || props.sending || props.isStreaming || !!props.streamingText) {
+  if (props.actionsLocked || props.sending || props.isStreaming || !!props.streamingText || !!props.streamingThought) {
     return false
   }
 
@@ -892,6 +907,10 @@ watch(() => props.streamingText, (value, oldValue) => {
   if (value && !oldValue) {
     collapseExpandedToolGroups()
   }
+  scrollToBottom(false)
+})
+
+watch(() => props.streamingThought, () => {
   scrollToBottom(false)
 })
 

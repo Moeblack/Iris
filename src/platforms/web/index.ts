@@ -24,7 +24,7 @@ import { createLogger } from '../../logger';
 import { MCPManager } from '../../mcp';
 import { assertManagementToken } from './security/management';
 import { applyRuntimeConfigReload } from '../../config/runtime';
-import { Content } from '../../types';
+import { Content, Part, isThoughtTextPart } from '../../types';
 import { formatContent } from './message-format';
 
 const logger = createLogger('WebPlatform');
@@ -126,6 +126,18 @@ export class WebPlatform extends PlatformAdapter {
 
     this.backend.on('assistant:content', (sid: string, content: Content) => {
       this.writeSSE(sid, { type: 'assistant_content', message: formatContent(content) });
+    });
+
+    this.backend.on('stream:parts', (sid: string, parts: Part[]) => {
+      for (const part of parts) {
+        if (isThoughtTextPart(part) && part.text) {
+          this.writeSSE(sid, {
+            type: 'thought_delta',
+            text: part.text,
+            durationMs: part.thoughtDurationMs,
+          });
+        }
+      }
     });
 
     this.backend.on('stream:end', (sid: string) => {

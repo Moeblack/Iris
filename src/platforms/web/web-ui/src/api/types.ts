@@ -247,6 +247,7 @@ export interface CfSetupResponse {
 export interface ChatCallbacks {
   onStreamStart?: () => void
   onDelta?: (text: string) => void
+  onThoughtDelta?: (text: string, durationMs?: number) => void
   onMessage?: (text: string) => void
   onStreamEnd?: () => void
   onDone?: () => void
