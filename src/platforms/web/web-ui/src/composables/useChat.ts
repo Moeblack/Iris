@@ -8,7 +8,7 @@
 import { computed, ref, watch } from 'vue'
 import { useSessions } from './useSessions'
 import * as api from '../api/client'
-import type { ImageInput, DocumentInput, Message, MessagePart } from '../api/types'
+import type { ChatDocumentAttachment, ChatImageAttachment, Message, MessagePart } from '../api/types'
 
 /** 当前会话的消息列表 */
 const messages = ref<Message[]>([])
@@ -37,6 +37,37 @@ const streamingText = ref('')
 /** 是否正在流式接收 */
 const isStreaming = ref(false)
 
+/** 尚未刷新到 UI 的流式增量，避免每个 chunk 都触发视图更新 */
+let pendingStreamingDelta = ''
+
+/** requestAnimationFrame id，用于合并高频流式刷新 */
+let scheduledStreamingFlushId: number | null = null
+
+function cancelScheduledStreamingFlush() {
+  if (scheduledStreamingFlushId !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(scheduledStreamingFlushId)
+  }
+  scheduledStreamingFlushId = null
+}
+
+function flushPendingStreamingDelta() {
+  cancelScheduledStreamingFlush()
+  if (!pendingStreamingDelta) return
+  streamingText.value += pendingStreamingDelta
+  pendingStreamingDelta = ''
+}
+
+function getBufferedStreamingText(): string {
+  return pendingStreamingDelta ? `${streamingText.value}${pendingStreamingDelta}` : streamingText.value
+}
+
+function resetStreamingState() {
+  cancelScheduledStreamingFlush()
+  pendingStreamingDelta = ''
+  streamingText.value = ''
+  isStreaming.value = false
+}
+
 /** 当前请求的 AbortController，预留给后续显式取消能力 */
 let _currentController: AbortController | null = null
 
@@ -54,30 +85,61 @@ let suppressNextSessionLoadForId: string | null = null
 
 const { currentSessionId, loadSessions, markSessionStreaming, markSessionCompleted, clearSessionActivity } = useSessions()
 
-function normalizeImages(images?: ImageInput[]): ImageInput[] {
+function queueStreamingDelta(delta: string) {
+  if (!delta) return
+
+  pendingStreamingDelta += delta
+  if (!isStreaming.value) {
+    isStreaming.value = true
+  }
+
+  if (scheduledStreamingFlushId !== null) return
+
+  if (typeof window === 'undefined') {
+    flushPendingStreamingDelta()
+    return
+  }
+
+  scheduledStreamingFlushId = window.requestAnimationFrame(() => {
+    scheduledStreamingFlushId = null
+    flushPendingStreamingDelta()
+  })
+}
+
+function normalizeImages(images?: ChatImageAttachment[]): ChatImageAttachment[] {
   return (images ?? []).map((image) => ({
     mimeType: image.mimeType,
-    data: image.data,
+    ...(image.data ? { data: image.data } : {}),
+    ...(image.file instanceof File ? { file: image.file } : {}),
+    ...(image.fileName ? { fileName: image.fileName } : {}),
+    ...(image.previewUrl ? { previewUrl: image.previewUrl } : {}),
+    ...(typeof image.size === 'number' ? { size: image.size } : {}),
   }))
 }
 
-function normalizeDocuments(documents?: DocumentInput[]): DocumentInput[] {
+function normalizeDocuments(documents?: ChatDocumentAttachment[]): ChatDocumentAttachment[] {
   return (documents ?? []).map((doc) => ({
     fileName: doc.fileName,
     mimeType: doc.mimeType,
-    data: doc.data,
+    ...(doc.data ? { data: doc.data } : {}),
+    ...(doc.file instanceof File ? { file: doc.file } : {}),
+    ...(typeof doc.size === 'number' ? { size: doc.size } : {}),
   }))
 }
 
 /** 构建用户消息 parts。接收已 normalize 的数组，不再重复复制。 */
-function buildUserMessageParts(text: string, images: ImageInput[], documents: DocumentInput[]): MessagePart[] {
+function buildUserMessageParts(text: string, images: ChatImageAttachment[], documents: ChatDocumentAttachment[]): MessagePart[] {
   const parts: MessagePart[] = []
 
   for (const image of images) {
     parts.push({
       type: 'image',
       mimeType: image.mimeType,
-      data: image.data,
+      ...(image.data ? { data: image.data } : {}),
+      ...(image.file instanceof File ? { file: image.file } : {}),
+      ...(image.previewUrl ? { previewUrl: image.previewUrl } : {}),
+      ...(image.fileName ? { fileName: image.fileName } : {}),
+      ...(typeof image.size === 'number' ? { size: image.size } : {}),
     })
   }
 
@@ -86,7 +148,9 @@ function buildUserMessageParts(text: string, images: ImageInput[], documents: Do
       type: 'document',
       fileName: doc.fileName,
       mimeType: doc.mimeType,
-      data: doc.data,
+      ...(doc.data ? { data: doc.data } : {}),
+      ...(doc.file instanceof File ? { file: doc.file } : {}),
+      ...(typeof doc.size === 'number' ? { size: doc.size } : {}),
     })
   }
 
@@ -153,15 +217,30 @@ export function useChat() {
     return activeRequestToken !== null && currentSessionId.value === activeRequestSessionId
   }
 
+  function consumeStreamingText(): string {
+    const fullText = getBufferedStreamingText()
+    resetStreamingState()
+    return fullText
+  }
+
   function flushStreaming(targetSessionId: string | null = activeRequestSessionId) {
-    if (streamingText.value && targetSessionId !== null && currentSessionId.value === targetSessionId) {
+    const fullText = consumeStreamingText()
+    if (fullText && targetSessionId !== null && currentSessionId.value === targetSessionId) {
       messages.value.push({
         role: 'model',
-        parts: [{ type: 'text', text: streamingText.value }],
+        parts: [{ type: 'text', text: fullText }],
       })
-      streamingText.value = ''
     }
-    isStreaming.value = false
+  }
+
+  function commitPlainAssistantMessage(text: string) {
+    const finalText = text || getBufferedStreamingText()
+    consumeStreamingText()
+    if (!isCurrentViewBoundToActiveRequest()) return
+    messages.value.push({
+      role: 'model',
+      parts: [{ type: 'text', text: finalText }],
+    })
   }
 
   function isRetryableUserMessage(message: Message | undefined): boolean {
@@ -177,17 +256,14 @@ export function useChat() {
   }
 
   function commitStructuredAssistantMessage(message: Message) {
+    consumeStreamingText()
     if (!isCurrentViewBoundToActiveRequest()) return
-    streamingText.value = ''
-    isStreaming.value = false
     messages.value.push(message)
   }
 
   const currentSessionSending = computed(() => sending.value && isCurrentViewBoundToActiveRequest())
   const currentSessionStreamingText = computed(() => {
-    return isCurrentViewBoundToActiveRequest()
-      ? streamingText.value
-      : ''
+    return isCurrentViewBoundToActiveRequest() ? streamingText.value : ''
   })
   const currentSessionIsStreaming = computed(() => {
     return isCurrentViewBoundToActiveRequest()
@@ -197,8 +273,7 @@ export function useChat() {
 
   async function reloadMessages() {
     if (sending.value) return
-    streamingText.value = ''
-    isStreaming.value = false
+    resetStreamingState()
     await loadMessagesForSession(currentSessionId.value)
   }
 
@@ -247,8 +322,7 @@ export function useChat() {
         await api.truncateMessages(currentSessionId.value, targetIndex)
       }
 
-      streamingText.value = ''
-      isStreaming.value = false
+      resetStreamingState()
       messages.value.splice(targetIndex)
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
@@ -260,7 +334,7 @@ export function useChat() {
     }
   }
 
-  async function sendMessage(text: string, images?: ImageInput[], documents?: DocumentInput[]) {
+  async function sendMessage(text: string, images?: ChatImageAttachment[], documents?: ChatDocumentAttachment[]) {
     armedDeleteMessageIndex.value = null
     deletingMessageIndex.value = null
     messageActionError.value = ''
@@ -270,8 +344,7 @@ export function useChat() {
     if (sending.value || (!text.trim() && normalizedImages.length === 0 && normalizedDocs.length === 0)) return
 
     sending.value = true
-    streamingText.value = ''
-    isStreaming.value = false
+    resetStreamingState()
     messagesError.value = ''
 
     // 立即显示用户消息
@@ -286,7 +359,7 @@ export function useChat() {
     activeRequestSessionId = currentSessionId.value
     const requestEntrySessionId = activeRequestSessionId
 
-    let receivedStructuredAssistantContent = false
+    let receivedFinalAssistantPayload = false
     let requestNeedsHistoryRefresh = false
     if (activeRequestSessionId) {
       markSessionStreaming(activeRequestSessionId)
@@ -311,27 +384,40 @@ export function useChat() {
 
         void loadSessions()
       },
-      onDelta(delta) {
+      onStreamStart() {
         if (isStale()) return
-        if (!isStreaming.value) isStreaming.value = true
-        streamingText.value += delta
+        receivedFinalAssistantPayload = false
+      },
+      onDelta(delta) {
+        if (isStale() || receivedFinalAssistantPayload) return
+        queueStreamingDelta(delta)
       },
       onMessage(fullText) {
-        if (receivedStructuredAssistantContent) return
-        if (isStale() || !isCurrentViewBoundToActiveRequest()) return
-        messages.value.push({
-          role: 'model',
-          parts: [{ type: 'text', text: fullText }],
-        })
+        if (receivedFinalAssistantPayload || isStale()) return
+        receivedFinalAssistantPayload = true
+        commitPlainAssistantMessage(fullText)
       },
       onAssistantContent(message) {
-        receivedStructuredAssistantContent = true
-        requestNeedsHistoryRefresh = requestNeedsHistoryRefresh || messageHasToolParts(message)
         if (isStale()) return
+        receivedFinalAssistantPayload = true
+        requestNeedsHistoryRefresh = requestNeedsHistoryRefresh || messageHasToolParts(message)
         commitStructuredAssistantMessage(message)
       },
       onStreamEnd() {
         if (isStale()) return
+        flushPendingStreamingDelta()
+      },
+      onDoneMeta(durationMs) {
+        if (isStale() || !isCurrentViewBoundToActiveRequest()) return
+        // 将 durationMs 回填到最后一条 model 消息的 meta
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          const msg = messages.value[i]
+          if (msg.role === 'model') {
+            if (!msg.meta) msg.meta = {}
+            msg.meta.durationMs = durationMs
+            break
+          }
+        }
       },
       onDone() {
         if (isStale()) return
@@ -339,7 +425,11 @@ export function useChat() {
         const finishedSessionId = activeRequestSessionId
         const shouldKeepCompletedBadge = !!finishedSessionId && currentSessionId.value !== finishedSessionId
 
-        flushStreaming(finishedSessionId)
+        if (receivedFinalAssistantPayload) {
+          resetStreamingState()
+        } else {
+          flushStreaming(finishedSessionId)
+        }
         if (finishedSessionId) {
           markSessionCompleted(finishedSessionId, shouldKeepCompletedBadge)
         }
@@ -379,6 +469,54 @@ export function useChat() {
     }, normalizedImages, normalizedDocs)
   }
 
+  function buildRetryImages(message: Message): ChatImageAttachment[] {
+    const images: ChatImageAttachment[] = []
+
+    for (const part of message.parts) {
+      if (part.type !== 'image' || typeof part.mimeType !== 'string') {
+        continue
+      }
+
+      if (part.file instanceof File) {
+        images.push({
+          mimeType: part.mimeType,
+          file: part.file,
+          fileName: part.fileName,
+          previewUrl: URL.createObjectURL(part.file),
+          size: typeof part.size === 'number' ? part.size : part.file.size,
+        })
+        continue
+      }
+
+      if (typeof part.data === 'string' && part.data) {
+        images.push({ mimeType: part.mimeType, data: part.data, fileName: part.fileName, size: part.size })
+      }
+    }
+
+    return images
+  }
+
+  function buildRetryDocuments(message: Message): ChatDocumentAttachment[] {
+    const documents: ChatDocumentAttachment[] = []
+
+    for (const part of message.parts) {
+      if (part.type !== 'document' || typeof part.mimeType !== 'string' || !part.fileName) {
+        continue
+      }
+
+      if (part.file instanceof File) {
+        documents.push({ fileName: part.fileName, mimeType: part.mimeType, file: part.file, size: typeof part.size === 'number' ? part.size : part.file.size })
+        continue
+      }
+
+      if (typeof part.data === 'string' && part.data) {
+        documents.push({ fileName: part.fileName, mimeType: part.mimeType, data: part.data, size: part.size })
+      }
+    }
+
+    return documents
+  }
+
   /** 重试指定消息所属轮次；未传索引时退化为重试最后一轮 */
   async function retryLastMessage(messageIndex?: number) {
     if (sending.value) {
@@ -401,16 +539,8 @@ export function useChat() {
       .filter((part) => part.type === 'text')
       .map((part) => part.text ?? '')
       .join('')
-    const images = userMsg.parts
-      .filter((part): part is MessagePart & { type: 'image'; mimeType: string; data: string } => (
-        part.type === 'image' && typeof part.mimeType === 'string' && typeof part.data === 'string'
-      ))
-      .map((part) => ({ mimeType: part.mimeType, data: part.data }))
-    const documents = userMsg.parts
-      .filter((part): part is MessagePart & { type: 'document'; mimeType: string; data: string } => (
-        part.type === 'document' && typeof part.mimeType === 'string' && typeof part.data === 'string'
-      ))
-      .map((part) => ({ fileName: part.fileName ?? '', mimeType: part.mimeType, data: part.data }))
+    const images = buildRetryImages(userMsg)
+    const documents = buildRetryDocuments(userMsg)
 
     if (!text.trim() && images.length === 0 && documents.length === 0) {
       messageActionError.value = '该轮对话缺少可重试的文本或附件内容。'

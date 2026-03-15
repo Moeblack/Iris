@@ -112,6 +112,10 @@ export class WebPlatform extends PlatformAdapter {
       this.writeSSE(sid, { type: 'message', text });
     });
 
+    this.backend.on('stream:start', (sid: string) => {
+      this.writeSSE(sid, { type: 'stream_start' });
+    });
+
     this.backend.on('stream:chunk', (sid: string, chunk: string) => {
       this.writeSSE(sid, { type: 'delta', text: chunk });
     });
@@ -126,6 +130,10 @@ export class WebPlatform extends PlatformAdapter {
 
     this.backend.on('stream:end', (sid: string) => {
       this.writeSSE(sid, { type: 'stream_end' });
+    });
+
+    this.backend.on('done', (sid: string, durationMs: number) => {
+      this.writeSSE(sid, { type: 'done_meta', durationMs });
     });
 
     return new Promise((resolve) => {
