@@ -19,6 +19,7 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@opentui/core": "latest",
     "@opentui/react": "latest",
+    "@wecom/aibot-node-sdk": "^1.0.2",
     "better-sqlite3": "^12.6.2",
     "cli-highlight": "^2.1.11",
     "discord.js": "^14.25.1",
