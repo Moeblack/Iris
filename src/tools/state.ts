@@ -210,8 +210,11 @@ export class ToolStateManager extends EventEmitter {
    * 调用方应先将工具状态转为 `awaiting_approval`，然后调用此方法阻塞。
    * 当外部代码将状态转为 `executing` 时返回 `true`（已批准）；
    * 当外部代码将状态转为 `error` 时返回 `false`（已拒绝）。
+   *
+   * 支持 AbortSignal：传入后，abort 触发时自动将工具状态转为 error 并返回 false。
+   * 不传则保持原有行为（仅等待状态变更）。
    */
-  waitForApproval(id: string): Promise<boolean> {
+  waitForApproval(id: string, signal?: AbortSignal): Promise<boolean> {
     const invocation = this.invocations.get(id);
     if (!invocation) {
       throw new Error(`工具调用不存在: ${id}`);
@@ -222,18 +225,45 @@ export class ToolStateManager extends EventEmitter {
       return Promise.resolve(invocation.status === 'executing');
     }
 
+    // 如果传入的 signal 已经 aborted，直接中止
+    if (signal?.aborted) {
+      try { this.transition(id, 'error', { error: 'Operation aborted' }); } catch { /* 已终态 */ }
+      return Promise.resolve(false);
+    }
+
     return new Promise<boolean>((resolve) => {
-      const handler = (event: ToolStateChangeEvent) => {
+      const cleanup = () => {
+        this.off('stateChange', onStateChange);
+        signal?.removeEventListener('abort', onAbort);
+      };
+
+      const onStateChange = (event: ToolStateChangeEvent) => {
         if (event.invocation.id !== id) return;
         if (event.invocation.status === 'executing') {
-          this.off('stateChange', handler);
+          cleanup();
           resolve(true);
         } else if (TERMINAL_STATUSES.has(event.invocation.status)) {
-          this.off('stateChange', handler);
+          cleanup();
           resolve(false);
         }
       };
-      this.on('stateChange', handler);
+
+      const onAbort = () => {
+        cleanup();
+        // 将工具状态转为 error，使其正常走完终态流程
+        try {
+          this.transition(id, 'error', { error: 'Operation aborted' });
+        } catch {
+          // 可能在 onStateChange 和 onAbort 之间发生了状态转换，忽略
+        }
+        resolve(false);
+      };
+
+      this.on('stateChange', onStateChange);
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
     });
   }
 }

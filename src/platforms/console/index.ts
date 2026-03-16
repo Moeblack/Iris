@@ -111,6 +111,9 @@ export class ConsolePlatform extends PlatformAdapter {
   /** redo 用的 Content 栈（与前端 undoRedoRef 对应） */
   private redoContentStack: Content[] = [];
 
+  /** 串行化 undo/redo 持久化操作，防止并发写入 */
+  private historyMutationQueue: Promise<void> = Promise.resolve();
+
   constructor(backend: Backend, options: ConsolePlatformOptions) {
     super();
     this.backend = backend;
@@ -125,6 +128,16 @@ export class ConsolePlatform extends PlatformAdapter {
       getMCPManager: options.getMCPManager,
       setMCPManager: options.setMCPManager,
     });
+  }
+
+  /**
+   * 将一个异步操作排入持久化队列，保证串行执行。
+   * 前一个操作失败不会阻塞后续操作。
+   */
+  private enqueueHistoryMutation(task: () => Promise<void>): Promise<void> {
+    const next = this.historyMutationQueue.then(task, task);
+    this.historyMutationQueue = next;
+    return next;
   }
 
   override async start(): Promise<void> {
@@ -216,22 +229,29 @@ export class ConsolePlatform extends PlatformAdapter {
         },
         onSubmit: (text: string) => this.handleInput(text),
         onUndo: (newLength: number) => {
-          // 先从 storage 拿当前最后一条消息存入 redo 栈
-          this.backend.getHistory(this.sessionId).then((history) => {
+          // 串行化：排入持久化队列，保证多次 undo 不会并发写入
+          this.enqueueHistoryMutation(async () => {
+            const history = await this.backend.getHistory(this.sessionId);
             if (history.length > newLength) {
               this.redoContentStack.push(history[history.length - 1]);
               if (this.redoContentStack.length > 200) {
                 this.redoContentStack.splice(0, this.redoContentStack.length - 200);
               }
             }
-            this.backend.truncateHistory(this.sessionId, newLength).catch(() => {});
+            await this.backend.truncateHistory(this.sessionId, newLength);
           });
         },
         onRedo: (_restoredRole: string) => {
-          const content = this.redoContentStack.pop();
-          if (content) {
-            this.backend.getStorage().addMessage(this.sessionId, content).catch(() => {});
-          }
+          // 串行化：排入持久化队列
+          this.enqueueHistoryMutation(async () => {
+            const content = this.redoContentStack.pop();
+            if (content) {
+              await this.backend.getStorage().addMessage(this.sessionId, content);
+            }
+          });
+        },
+        onClearRedoStack: () => {
+          this.redoContentStack.length = 0;
         },
         onToolApproval: (toolId: string, approved: boolean) => {
           this.backend.approveTool(toolId, approved);

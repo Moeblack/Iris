@@ -525,3 +525,148 @@ describe('combineSignals (via sendRequest behavior)', () => {
     expect(combined.signal.aborted).toBe(true);
   });
 });
+
+// ============ waitForApproval + AbortSignal 测试 ============
+
+describe('ToolStateManager.waitForApproval: abort support', () => {
+  let toolState: ToolStateManager;
+
+  beforeEach(() => {
+    toolState = new ToolStateManager();
+  });
+
+  it('等待审批期间 abort 触发：返回 false，工具状态转为 error', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'awaiting_approval');
+
+    const controller = new AbortController();
+
+    // 50ms 后 abort
+    setTimeout(() => controller.abort(), 50);
+
+    const approved = await toolState.waitForApproval(inv.id, controller.signal);
+
+    expect(approved).toBe(false);
+    expect(toolState.get(inv.id)!.status).toBe('error');
+    expect(toolState.get(inv.id)!.error).toBe('Operation aborted');
+  });
+
+  it('signal 已 aborted 时直接返回 false', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'awaiting_approval');
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const start = Date.now();
+    const approved = await toolState.waitForApproval(inv.id, controller.signal);
+    const elapsed = Date.now() - start;
+
+    expect(approved).toBe(false);
+    expect(elapsed).toBeLessThan(20);
+    expect(toolState.get(inv.id)!.status).toBe('error');
+  });
+
+  it('不传 signal 时保持原有行为：正常批准返回 true', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'awaiting_approval');
+
+    // 50ms 后批准
+    setTimeout(() => toolState.transition(inv.id, 'executing'), 50);
+
+    const approved = await toolState.waitForApproval(inv.id);
+    expect(approved).toBe(true);
+  });
+
+  it('不传 signal 时保持原有行为：拒绝返回 false', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'awaiting_approval');
+
+    // 50ms 后拒绝
+    setTimeout(() => toolState.transition(inv.id, 'error', { error: 'denied' }), 50);
+
+    const approved = await toolState.waitForApproval(inv.id);
+    expect(approved).toBe(false);
+  });
+
+  it('批准先于 abort 发生：返回 true，abort 不再影响状态', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'awaiting_approval');
+
+    const controller = new AbortController();
+
+    // 先批准
+    setTimeout(() => toolState.transition(inv.id, 'executing'), 30);
+    // 再 abort（应无效）
+    setTimeout(() => controller.abort(), 80);
+
+    const approved = await toolState.waitForApproval(inv.id, controller.signal);
+    expect(approved).toBe(true);
+    expect(toolState.get(inv.id)!.status).toBe('executing');
+  });
+
+  it('状态已经不是 awaiting_approval 时直接返回，signal 不影响', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'executing');
+
+    const controller = new AbortController();
+    const approved = await toolState.waitForApproval(inv.id, controller.signal);
+    expect(approved).toBe(true);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it('abort 后 stateChange 监听被清除（无泄漏）', async () => {
+    const inv = toolState.create('test_tool', {}, 'queued');
+    toolState.transition(inv.id, 'awaiting_approval');
+
+    const listenerCountBefore = toolState.listenerCount('stateChange');
+    const controller = new AbortController();
+
+    const promise = toolState.waitForApproval(inv.id, controller.signal);
+
+    // 等一个微任务让监听注册完毕
+    await new Promise(r => setTimeout(r, 0));
+    expect(toolState.listenerCount('stateChange')).toBe(listenerCountBefore + 1);
+
+    controller.abort();
+    await promise;
+
+    // 监听应已清除
+    expect(toolState.listenerCount('stateChange')).toBe(listenerCountBefore);
+  });
+});
+
+// ============ scheduler + waitForApproval + abort 集成测试 ============
+
+describe('scheduler: abort during awaiting_approval', () => {
+  it('工具处于 awaiting_approval 时 abort，executeSingle 正确退出', async () => {
+    const registry = createRegistry([{
+      name: 'manual_tool',
+      handler: async () => 'should_not_reach',
+    }]);
+    const toolState = new ToolStateManager();
+    const inv = toolState.create('manual_tool', {}, 'queued');
+
+    const controller = new AbortController();
+
+    const calls = [fc('manual_tool')];
+    const plan = buildExecutionPlan(calls, registry);
+    const policies: Record<string, ToolPolicyConfig> = {
+      manual_tool: { autoApprove: false },
+    };
+
+    // 100ms 后 abort（模拟用户按 ESC）
+    setTimeout(() => controller.abort(), 100);
+
+    const results = await executePlan(
+      calls, plan, registry, toolState, [inv.id], policies, controller.signal,
+    );
+
+    expect(results).toHaveLength(1);
+    // waitForApproval 被 abort 中断，返回拒绝
+    const response = results[0].functionResponse.response as Record<string, unknown>;
+    expect(response.error).toBeTruthy();
+    expect(toolState.get(inv.id)!.status).toBe('error');
+  });
+});
+
