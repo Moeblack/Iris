@@ -97,9 +97,13 @@ export class ToolLoop {
       rounds++;
 
       // 组装请求
-      const allowedToolNames = new Set(Object.keys(this.config.toolPolicies));
+      // toolPolicies 非空时用作白名单过滤；为空时不过滤，所有已注册工具均可被 LLM 调用
+      const policyKeys = Object.keys(this.config.toolPolicies);
+      const declarations = policyKeys.length > 0
+        ? this.tools.getDeclarations().filter(d => policyKeys.includes(d.name))
+        : this.tools.getDeclarations();
       const request = this.prompt.assemble(
-        history, this.tools.getDeclarations().filter(d => allowedToolNames.has(d.name)), undefined, options?.extraParts,
+        history, declarations, undefined, options?.extraParts,
       );
 
       // 调用 LLM（具体方式由 callLLM 决定）
