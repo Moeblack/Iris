@@ -570,14 +570,6 @@ export class Backend extends EventEmitter {
     }
   }
 
-  /**
-   * 中断当前正在进行的 chat 调用。
-   * 会取消底层 HTTP 请求并使工具循环提前退出。
-   */
-  abortChat(): void {
-    this.activeAbortController?.abort();
-  }
-
   /** 获取流式设置 */
   isStreamEnabled(): boolean {
     return this.stream;
@@ -622,6 +614,10 @@ export class Backend extends EventEmitter {
     this.toolState.clearAll();
 
     // 1. 加载历史并追加用户消息
+    // ⚠️ 注意：Backend 不处理连续用户消息的合并。
+    //    如果平台层并发调用 chat()，历史中会出现连续两条 role: "user" 的消息。
+    //    部分 LLM API（如 Gemini）不允许同角色消息相邻，可能导致请求失败。
+    //    平台层应自行实现并发控制或消息缓冲（参考 WXWorkPlatform 的实现）。
     const storedHistory = await this.storage.getHistory(sessionId);
     const history = this.prepareHistoryForLLM(storedHistory);
     const isNewSession = storedHistory.length === 0;
@@ -705,6 +701,10 @@ export class Backend extends EventEmitter {
 
     // 6.1. 如果被 abort，提前退出，不做后续处理
     if (result.aborted) {
+      // buildAbortResult 已清理内存中的 history，但 onMessageAppend 可能已将不完整的消息写入磁盘。
+      // 用 truncateHistory 将磁盘回滚到与内存一致的状态，防止下次加载时出现 dangling functionCall。
+      await this.storage.truncateHistory(sessionId, result.history.length);
+      this.emit('done', sessionId, Date.now() - startTime);
       return;
     }
 

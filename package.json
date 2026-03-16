@@ -1,5 +1,5 @@
 {
-  "name": "Iris",
+  "name": "iris",
   "version": "1.0.0",
   "description": "模块化、可解耦的 AI 聊天框架，支持多平台、多 LLM、工具调用",
   "type": "module",
@@ -12,7 +12,8 @@
     "dev:ui": "cd src/platforms/web/web-ui && npm run dev",
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts",
-    "setup": "bun install && cd src/platforms/web/web-ui && npm install"
+    "setup": "bun install && cd src/platforms/web/web-ui && npm install",
+    "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
@@ -39,6 +40,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.15",
     "@types/react": ">=19.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
   }
 }
