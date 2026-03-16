@@ -185,6 +185,8 @@ interface ChatState {
   stream: {
     streamId: string;
     buffer: string;
+    /** 已固化到 buffer 中的工具调用 ID 集合 */
+    committedToolIds: Set<string>;
     dirty: boolean;
     throttleTimer: ReturnType<typeof setTimeout> | null;
   } | null;
@@ -313,28 +315,33 @@ export class WXWorkPlatform extends PlatformAdapter {
       const cs = this.findChatStateBySid(sid);
       if (!cs || !cs.frame || !cs.stream || cs.stopped) return;
 
-      // 按创建时间排序，保证显示顺序与实际调用顺序一致
-      const statusIcons: Record<string, string> = {
-        queued: '⏳',
-        executing: '🔧',
-        success: '✅',
-        error: '❌',
-        streaming: '📡',
-        awaiting_approval: '🔐',
-        awaiting_apply: '📋',
-        warning: '⚠️',
-      };
+      // 按创建时间排序
       const sorted = [...invocations].sort((a, b) => a.createdAt - b.createdAt);
-      const toolLines = sorted.map((inv, i) => {
-        const icon = statusIcons[inv.status] || '⏳';
-        return `${i + 1}. ${icon} \`${inv.toolName}\` ${inv.status}`;
-      });
-      const toolSummary = toolLines.join('\n');
 
-      const displayText = cs.stream.buffer
-        ? `${cs.stream.buffer}\n\n---\n${toolSummary}`
-        : toolSummary;
-      this.wsClient.replyStream(cs.frame, cs.stream.streamId, displayText, false).catch((err) => {
+      // 将新完成的工具状态固化到 buffer 中（按时间顺序嵌入 AI 文本之间）
+      for (const inv of sorted) {
+        const isDone = inv.status === 'success' || inv.status === 'error';
+        if (isDone && !cs.stream.committedToolIds.has(inv.id)) {
+          cs.stream.committedToolIds.add(inv.id);
+          const line = formatToolLine(inv);
+          // 末尾留 \n\n，让后续 stream:chunk 的 AI 文本自然另起一段
+          cs.stream.buffer = cs.stream.buffer
+            ? `${cs.stream.buffer}\n\n${line}\n\n` : `${line}\n\n`;
+        }
+      }
+
+      // 仍在执行中的工具：临时追加在 buffer 末尾（不固化）
+      const activeLine = sorted
+        .filter(inv => !cs.stream!.committedToolIds.has(inv.id))
+        .map(inv => formatToolLine(inv))
+        .join('\n\n');
+
+      const displayText = activeLine
+        ? (cs.stream.buffer ? `${cs.stream.buffer}\n\n${activeLine}` : activeLine)
+        : cs.stream.buffer;
+
+      if (!displayText) return;
+      this.wsClient.replyStream(cs.frame, cs.stream.streamId, displayText, false).catch(err => {
         logger.error(`工具状态更新失败 (session=${sid}):`, err);
       });
     });
@@ -349,6 +356,7 @@ export class WXWorkPlatform extends PlatformAdapter {
         cs.stream = {
           streamId: generateReqId('stream'),
           buffer: '',
+          committedToolIds: new Set(),
           dirty: false,
           throttleTimer: null,
         };
@@ -648,8 +656,8 @@ export class WXWorkPlatform extends PlatformAdapter {
     // /flush — 打断等待，立即推送缓冲消息
     if (cmd === '/flush') {
       const cs = this.chatStates.get(ck);
-      if (!cs || cs.pendingMessages.length === 0) {
-        await reply('ℹ️ 当前没有缓冲中的消息。');
+      if (!cs || (!cs.busy && cs.pendingMessages.length === 0)) {
+        await reply('ℹ️ 当前没有正在进行的回复或缓冲中的消息。');
         return true;
       }
       // 先中止当前回复
@@ -667,14 +675,16 @@ export class WXWorkPlatform extends PlatformAdapter {
           this.wsClient.replyStream(cs.frame, cs.stream.streamId, stopText, true).catch(() => {});
           cs.stream = null;
         }
-        // 注意：不在此处释放 busy，done 事件会释放。
-        // 但我们需要立即处理 pending，所以手动释放。
-        cs.busy = false;
-        cs.stopped = false;
-        cs.frame = null;
+        // 不手动释放 busy —— 等 done 事件自然触发。
+        // done 事件会释放 busy、重置 stopped、清空 frame，
+        // 并自动调用 flushPendingMessages 处理缓冲消息。
+        // 如果在此处手动释放，会在 abort 清理（truncateHistory）完成前
+        // 就启动新的 chat，导致读到未清理的历史（孤立 tool_call）。
+      } else {
+        // 不 busy 但有 pending 消息（边界情况）→ 直接发送
+        this.flushPendingMessages(cs);
       }
-      this.flushPendingMessages(cs);
-      logger.info(`[${cs.sessionId}] 用户 /flush 立即推送缓冲消息`);
+      logger.info(`[${cs.sessionId}] 用户 /flush：${cs.busy ? '已中止当前回复，等待 done 后自动处理缓冲' : '直接处理缓冲消息'}`);
       return true;
     }
 
@@ -714,7 +724,7 @@ export class WXWorkPlatform extends PlatformAdapter {
     // 流式模式先发 thinking 占位
     if (this.backend.isStreamEnabled()) {
       const streamId = generateReqId('stream');
-      cs.stream = { streamId, buffer: '', dirty: false, throttleTimer: null };
+      cs.stream = { streamId, buffer: '', committedToolIds: new Set(), dirty: false, throttleTimer: null };
       try {
         await this.wsClient.replyStream(frame, streamId, THINKING_PLACEHOLDER, false);
       } catch (err) {
@@ -813,6 +823,37 @@ export class WXWorkPlatform extends PlatformAdapter {
 }
 
 // ============ 工具函数 ============
+
+/** 工具状态图标映射 */
+const STATUS_ICONS: Record<string, string> = {
+  queued: '⏳',
+  executing: '🔧',
+  success: '✅',
+  error: '❌',
+  streaming: '📡',
+  awaiting_approval: '🔐',
+  awaiting_apply: '📋',
+  warning: '⚠️',
+};
+
+/** 工具状态中文标签映射 */
+const STATUS_LABELS: Record<string, string> = {
+  queued: '等待中',
+  executing: '执行中',
+  success: '成功',
+  error: '失败',
+  streaming: '输出中',
+  awaiting_approval: '等待审批',
+  awaiting_apply: '等待应用',
+  warning: '警告',
+};
+
+/** 格式化单个工具行 */
+function formatToolLine(inv: { toolName: string; status: string }): string {
+  const icon = STATUS_ICONS[inv.status] || '⏳';
+  const label = STATUS_LABELS[inv.status] || inv.status;
+  return `${icon} \`${inv.toolName}\` ${label}`;
+}
 
 /** 根据文件头魔术字节检测图片 MIME 类型 */
 function detectImageMime(buffer: Buffer): string | null {
