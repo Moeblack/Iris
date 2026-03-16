@@ -102,6 +102,7 @@ interface AppProps {
   onSubmit: (text: string) => void;
   onUndo: (newLength: number) => void;
   onRedo: (restoredRole: string) => void;
+  onClearRedoStack: () => void;
   onToolApproval: (toolId: string, approved: boolean) => void;
   onAbort: () => void;
   onNewSession: () => void;
@@ -120,7 +121,7 @@ interface AppProps {
 }
 
 type ViewMode = 'chat' | 'session-list' | 'model-list' | 'settings';
-export function App({ onReady, onSubmit, onUndo, onRedo, onToolApproval, onAbort, onNewSession, onLoadSession, onListSessions, onRunCommand, onListModels, onSwitchModel, onLoadSettings, onSaveSettings, onExit, modeName, modelId, modelName, contextWindow }: AppProps) {
+export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToolApproval, onAbort, onNewSession, onLoadSession, onListSessions, onRunCommand, onListModels, onSwitchModel, onLoadSettings, onSaveSettings, onExit, modeName, modelId, modelName, contextWindow }: AppProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingParts, setStreamingParts] = useState<MessagePart[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -262,7 +263,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onToolApproval, onAbort
   // ============ 命令处理 ============
   const handleSubmit = useCallback((text: string) => {
     if (text === '/exit') { onExit(); return; }
-    if (text === '/new') { setMessages([]); toolInvocationsRef.current = []; onNewSession(); return; }
+    if (text === '/new') { clearRedo(undoRedoRef.current); onClearRedoStack(); setMessages([]); toolInvocationsRef.current = []; onNewSession(); return; }
     if (text === '/undo') {
       setMessages((prev) => {
         const result = performUndo(prev, undoRedoRef.current);
@@ -284,6 +285,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onToolApproval, onAbort
     if (text === '/load') { onListSessions().then(metas => { setSessionList(metas); setSelectedIndex(0); setViewMode('session-list'); }); return; }
     if (text === '/settings' || text === '/mcp') { setSettingsInitialSection(text === '/mcp' ? 'mcp' : 'general'); setViewMode('settings'); return; }
     if (text.startsWith('/model')) {
+      clearRedo(undoRedoRef.current); onClearRedoStack();
       const arg = text.slice('/model'.length).trim();
       if (!arg) {
         const models = onListModels();
@@ -303,6 +305,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onToolApproval, onAbort
     if (text.startsWith('/sh ') || text === '/sh') {
       const cmd = text.slice(4).trim();
       if (!cmd) return;
+      clearRedo(undoRedoRef.current); onClearRedoStack();
       try {
         const result = onRunCommand(cmd);
         setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.output || '(无输出)' }] }]);
@@ -312,8 +315,9 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onToolApproval, onAbort
       return;
     }
     clearRedo(undoRedoRef.current);
+    onClearRedoStack();
     onSubmit(text);
-  }, [onSubmit, onUndo, onRedo, onNewSession, onListSessions, onRunCommand, onListModels, onSwitchModel, onExit]);
+  }, [onSubmit, onUndo, onRedo, onClearRedoStack, onNewSession, onListSessions, onRunCommand, onListModels, onSwitchModel, onExit]);
 
   // ============ 键盘输入 ============
   useKeyboard((key) => {
@@ -352,7 +356,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onToolApproval, onAbort
       else if (key.name === 'down') setSelectedIndex((prev) => Math.min(sessionList.length - 1, prev + 1));
       else if (key.name === 'enter' || key.name === 'return') {
         const selected = sessionList[selectedIndex];
-        if (selected) { setMessages([]); toolInvocationsRef.current = []; setViewMode('chat'); onLoadSession(selected.id).catch(() => {}); }
+        if (selected) { clearRedo(undoRedoRef.current); onClearRedoStack(); setMessages([]); toolInvocationsRef.current = []; setViewMode('chat'); onLoadSession(selected.id).catch(() => {}); }
       }
       return;
     }

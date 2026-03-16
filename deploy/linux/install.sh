@@ -4,29 +4,42 @@
 #
 #  用法：curl -fsSL https://raw.githubusercontent.com/Lianues/Iris/main/deploy/linux/install.sh | bash
 #
-#  功能：
-#  1. 检测系统和架构
-#  2. 安装系统依赖 (git, curl, build-essential 等)
-#  3. 安装 Node.js 22 (如未安装)
-#  4. 创建 iris 用户 + /opt/iris 目录
-#  5. 克隆项目 → npm run setup → npm run build
-#  6. 下载预编译 iris-onboard 二进制
-#  7. 安装全局 iris 命令
-#  8. 安装 systemd 服务（不立即启动）
+#  支持环境：
+#  - Linux (x64 / arm64)：Ubuntu, Debian, CentOS, Fedora, Alpine, Arch ...
+#  - Termux (Android)
+#
+#  工作流程：
+#  1. 检测系统、架构、环境（Linux / Termux）
+#  2. 安装运行时依赖（Node.js >= 18）
+#  3. 从 GitHub Release 下载预编译包并解压
+#  4. 初始化配置模板
+#  5. 安装全局 iris 命令
+#  6. 安装 systemd 服务（仅 Linux，不立即启动）
+#
+#  环境变量（可覆盖默认值）：
+#    IRIS_VERSION          Release tag，默认 latest
+#    IRIS_INSTALL_DIR      安装目录，默认 /opt/iris 或 $HOME/iris (Termux)
+#    IRIS_REPO_URL         GitHub 仓库 URL（仅 fallback 构建时使用）
+#    IRIS_REPO_BRANCH      分支名（仅 fallback 构建时使用）
+#    IRIS_MIRROR           下载镜像前缀，如 https://ghproxy.com/
 # ==========================================
 
 set -euo pipefail
 
-# ── 全局变量 ───────────────────────────────
+# ── 全局变量 ─────────────────────────────
 IRIS_VERSION="${IRIS_VERSION:-latest}"
-INSTALL_DIR="${IRIS_INSTALL_DIR:-/opt/iris}"
 REPO_URL="${IRIS_REPO_URL:-https://github.com/Lianues/Iris.git}"
 REPO_BRANCH="${IRIS_REPO_BRANCH:-main}"
+GH_REPO="Lianues/Iris"
 NODE_MAJOR=22
 SERVICE_NAME="iris"
-BIN_DIR="/usr/local/bin"
+IS_TERMUX=false
+IS_ROOT=false
+INSTALL_DIR=""   # 稍后根据环境决定
+BIN_DIR=""       # 同上
+MIRROR_PREFIX="${IRIS_MIRROR:-}"
 
-# ── 颜色输出 ───────────────────────────────
+# ── 颜色输出 ─────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -42,21 +55,76 @@ die()     { error "$*"; exit 1; }
 step()    { echo -e "\n${BLUE}${BOLD}── $* ──${NC}"; }
 success() { echo -e "${CYAN}${BOLD}$*${NC}"; }
 
-# ── 清理钩子 ───────────────────────────────
+# ── 清理钩子 ─────────────────────────────
 cleanup() {
     rm -f /tmp/iris_install_*.tmp 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# ── Root 检查 ──────────────────────────────
-check_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-        die "请以 root 用户运行此脚本：sudo bash install.sh"
+# ==========================================
+#  环境检测
+# ==========================================
+
+detect_environment() {
+    step "检测运行环境"
+
+    # ── Termux 检测
+    if [ -n "${TERMUX_VERSION:-}" ] || [ -d "$HOME/.termux" ] || [[ "${PREFIX:-}" == *com.termux* ]]; then
+        IS_TERMUX=true
+        info "检测到 Termux 环境 (Android)"
     fi
+
+    # ── Root 检测
+    if [ "$(id -u)" -eq 0 ]; then
+        IS_ROOT=true
+    fi
+
+    # ── 非 Termux 且非 Root：提示
+    if ! $IS_TERMUX && ! $IS_ROOT; then
+        warn "当前不是 root 用户。将安装到 \$HOME/iris，不安装 systemd 服务。"
+        warn "如需安装到 /opt/iris 并配置 systemd，请使用：sudo bash install.sh"
+    fi
+
+    # ── 决定安装目录
+    if [ -n "${IRIS_INSTALL_DIR:-}" ]; then
+        INSTALL_DIR="$IRIS_INSTALL_DIR"
+    elif $IS_TERMUX; then
+        INSTALL_DIR="$HOME/iris"
+    elif $IS_ROOT; then
+        INSTALL_DIR="/opt/iris"
+    else
+        INSTALL_DIR="$HOME/iris"
+    fi
+
+    # ── 决定 CLI 安装位置
+    if $IS_TERMUX; then
+        BIN_DIR="$PREFIX/bin"
+    elif $IS_ROOT; then
+        BIN_DIR="/usr/local/bin"
+    else
+        BIN_DIR="$HOME/.local/bin"
+        mkdir -p "$BIN_DIR"
+    fi
+
+    info "安装目录：$INSTALL_DIR"
+    info "CLI 路径：$BIN_DIR/iris"
 }
 
-# ── 系统检测 ───────────────────────────────
 detect_os() {
+    if $IS_TERMUX; then
+        OS="termux"
+        VER=""
+        ARCH=$(uname -m)
+        case "$ARCH" in
+            aarch64|arm64) ARCH="arm64" ;;
+            x86_64|amd64)  ARCH="x64" ;;
+            armv7l|armv8l) ARCH="arm64" ;;  # Termux 多数仍跑 aarch64 用户空间
+            *)             die "不支持的架构：$ARCH" ;;
+        esac
+        info "系统：Termux/Android ($ARCH)"
+        return
+    fi
+
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS="$ID"
@@ -80,38 +148,66 @@ detect_os() {
     info "系统：$OS ${VER} ($ARCH)"
 }
 
-# ── 安装系统依赖 ──────────────────────────
+# ==========================================
+#  依赖安装
+# ==========================================
+
 install_dependencies() {
-    step "安装系统依赖"
+    step "检查运行时依赖"
 
-    case "$OS" in
-        ubuntu|debian|linuxmint|pop)
-            apt-get update -qq
-            apt-get install -y -qq curl git build-essential python3 ca-certificates gnupg
-            ;;
-        centos|rhel|rocky|almalinux|ol)
-            yum install -y curl git gcc gcc-c++ make python3 ca-certificates
-            ;;
-        fedora)
-            dnf install -y curl git gcc gcc-c++ make python3 ca-certificates
-            ;;
-        alpine)
-            apk add --no-cache curl git build-base python3 ca-certificates
-            ;;
-        arch|manjaro)
-            pacman -Sy --noconfirm curl git base-devel python
-            ;;
-        *)
-            warn "未识别的系统 ($OS)，请确保已安装: curl git gcc make python3"
-            ;;
-    esac
+    if $IS_TERMUX; then
+        pkg update -y
+        pkg install -y nodejs-lts git curl
+        info "Termux 依赖安装完成"
+        return
+    fi
 
-    info "系统依赖安装完成"
+    # Linux：预编译包只需要 Node.js 和 curl/git，不需要 build-essential
+    local need_install=false
+    for cmd in curl git; do
+        if ! command -v "$cmd" &>/dev/null; then
+            need_install=true
+            break
+        fi
+    done
+
+    if $need_install && $IS_ROOT; then
+        case "$OS" in
+            ubuntu|debian|linuxmint|pop)
+                apt-get update -qq
+                apt-get install -y -qq curl git ca-certificates
+                ;;
+            centos|rhel|rocky|almalinux|ol)
+                yum install -y curl git ca-certificates
+                ;;
+            fedora)
+                dnf install -y curl git ca-certificates
+                ;;
+            alpine)
+                apk add --no-cache curl git ca-certificates
+                ;;
+            arch|manjaro)
+                pacman -Sy --noconfirm curl git
+                ;;
+            *)
+                warn "未识别的系统 ($OS)，请确保已安装: curl git"
+                ;;
+        esac
+    elif $need_install; then
+        die "缺少 curl 或 git。请先安装：sudo apt install curl git（或对应包管理器命令）"
+    fi
+
+    info "基础依赖已就绪"
 }
 
-# ── 安装 Node.js ──────────────────────────
 install_node() {
     step "检查 Node.js"
+
+    # Termux 已在 install_dependencies 中安装
+    if $IS_TERMUX; then
+        info "Node.js $(node -v) 已通过 Termux pkg 安装"
+        return
+    fi
 
     if command -v node &>/dev/null; then
         local node_ver
@@ -124,11 +220,14 @@ install_node() {
         fi
     fi
 
+    if ! $IS_ROOT; then
+        die "Node.js 未安装或版本过低。请先安装 Node.js >= 18，或使用 sudo 运行本脚本自动安装。"
+    fi
+
     info "正在安装 Node.js ${NODE_MAJOR}..."
 
     case "$OS" in
         ubuntu|debian|linuxmint|pop)
-            # NodeSource 仓库
             mkdir -p /etc/apt/keyrings
             curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
                 | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg 2>/dev/null
@@ -155,8 +254,130 @@ install_node() {
     info "Node.js $(node -v) 安装完成"
 }
 
-# ── 创建用户 ──────────────────────────────
+# ==========================================
+#  下载并解压预编译包
+# ==========================================
+
+resolve_download_url() {
+    local filename="$1"
+    local base_url
+
+    if [ "$IRIS_VERSION" = "latest" ]; then
+        base_url="https://github.com/$GH_REPO/releases/latest/download"
+    else
+        base_url="https://github.com/$GH_REPO/releases/download/$IRIS_VERSION"
+    fi
+
+    local url="$base_url/$filename"
+
+    # 如果配置了镜像前缀，拼接到 URL 前面
+    if [ -n "$MIRROR_PREFIX" ]; then
+        echo "${MIRROR_PREFIX}${url}"
+    else
+        echo "$url"
+    fi
+}
+
+download_and_extract() {
+    step "下载 Iris 预编译包"
+
+    local tarball="iris-linux-${ARCH}.tar.gz"
+    local url
+    url=$(resolve_download_url "$tarball")
+
+    info "下载地址：$url"
+
+    local tmp_tar
+    tmp_tar=$(mktemp /tmp/iris_install_XXXXXX.tar.gz)
+
+    if ! curl -fSL --connect-timeout 15 --max-time 300 --retry 2 -o "$tmp_tar" "$url" 2>&1; then
+        rm -f "$tmp_tar"
+        warn "预编译包下载失败（Release 可能尚未发布）"
+        warn "将回退到源码构建模式..."
+        fallback_build
+        return
+    fi
+
+    # 解压
+    mkdir -p "$INSTALL_DIR"
+    tar xzf "$tmp_tar" -C "$INSTALL_DIR" --strip-components=1
+    rm -f "$tmp_tar"
+
+    # 修复权限
+    if $IS_ROOT && id -u iris &>/dev/null 2>&1; then
+        chown -R iris:iris "$INSTALL_DIR"
+    fi
+
+    info "解压完成：$INSTALL_DIR"
+}
+
+# ── Fallback：源码构建（Release 未发布时的降级方案）
+fallback_build() {
+    step "回退：源码克隆与构建"
+
+    # Linux 需要编译工具链（native addon）
+    if ! $IS_TERMUX && $IS_ROOT; then
+        case "$OS" in
+            ubuntu|debian|linuxmint|pop)
+                apt-get install -y -qq build-essential python3 2>/dev/null || true
+                ;;
+            centos|rhel|rocky|almalinux|ol)
+                yum install -y gcc gcc-c++ make python3 2>/dev/null || true
+                ;;
+            fedora)
+                dnf install -y gcc gcc-c++ make python3 2>/dev/null || true
+                ;;
+        esac
+    fi
+
+    # 安装 bun（构建需要）
+    if ! command -v bun &>/dev/null; then
+        info "安装 Bun..."
+        curl -fsSL https://bun.sh/install | bash
+        export PATH="$HOME/.bun/bin:$PATH"
+    fi
+
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        info "项目已存在，拉取最新代码..."
+        cd "$INSTALL_DIR"
+        git pull origin "$REPO_BRANCH" 2>/dev/null || warn "git pull 失败，继续使用现有代码"
+    else
+        info "正在克隆 Iris..."
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$tmp_dir"
+        mkdir -p "$INSTALL_DIR"
+        cp -rT "$tmp_dir" "$INSTALL_DIR" 2>/dev/null || cp -a "$tmp_dir/." "$INSTALL_DIR/"
+        rm -rf "$tmp_dir"
+    fi
+
+    cd "$INSTALL_DIR"
+
+    info "安装依赖..."
+    bun install 2>&1 | tail -5
+    if [ -d src/platforms/web/web-ui ]; then
+        cd src/platforms/web/web-ui && npm install 2>&1 | tail -5 && cd "$INSTALL_DIR"
+    fi
+
+    info "构建项目..."
+    bun run build 2>&1 | tail -5
+
+    if $IS_ROOT && id -u iris &>/dev/null 2>&1; then
+        chown -R iris:iris "$INSTALL_DIR"
+    fi
+
+    info "源码构建完成"
+}
+
+# ==========================================
+#  配置与安装
+# ==========================================
+
 create_user() {
+    if ! $IS_ROOT || $IS_TERMUX; then
+        return 0
+    fi
+
     step "创建 iris 用户"
 
     if id -u iris &>/dev/null; then
@@ -170,40 +391,6 @@ create_user() {
     chown iris:iris "$INSTALL_DIR"
 }
 
-# ── 克隆并构建 ────────────────────────────
-clone_and_build() {
-    step "克隆并构建 Iris"
-
-    if [ -d "$INSTALL_DIR/.git" ]; then
-        info "项目已存在，拉取最新代码..."
-        cd "$INSTALL_DIR"
-        sudo -u iris git pull origin "$REPO_BRANCH" 2>/dev/null || {
-            warn "git pull 失败，将继续使用现有代码"
-        }
-    else
-        info "正在克隆 Iris..."
-        # 先克隆到临时目录再移入
-        local tmp_dir
-        tmp_dir=$(mktemp -d)
-        git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$tmp_dir"
-        # 移动内容到安装目录（保留已有的 data/ 等）
-        cp -rT "$tmp_dir" "$INSTALL_DIR" 2>/dev/null || cp -a "$tmp_dir/." "$INSTALL_DIR/"
-        rm -rf "$tmp_dir"
-        chown -R iris:iris "$INSTALL_DIR"
-    fi
-
-    cd "$INSTALL_DIR"
-
-    info "安装依赖..."
-    sudo -u iris npm run setup 2>&1 | tail -5
-
-    info "构建项目..."
-    sudo -u iris npm run build 2>&1 | tail -5
-
-    info "构建完成"
-}
-
-# ── 初始化配置 ────────────────────────────
 init_config() {
     step "初始化配置"
 
@@ -214,124 +401,95 @@ init_config() {
         info "配置已存在，跳过初始化（运行 iris onboard 可重新配置）"
     else
         mkdir -p "$config_dir"
-        cp -n "$example_dir"/*.yaml "$config_dir/" 2>/dev/null || true
-        chown -R iris:iris "$config_dir"
-        info "已从模板创建默认配置"
+        if [ -d "$example_dir" ]; then
+            cp -n "$example_dir"/*.yaml "$config_dir/" 2>/dev/null || true
+            info "已从模板创建默认配置"
+        else
+            warn "配置模板目录不存在，跳过配置初始化"
+        fi
+    fi
+
+    # Termux / 非 root：确保当前用户拥有目录
+    if ! $IS_ROOT; then
+        mkdir -p "$INSTALL_DIR/data/sessions"
     fi
 }
 
-# ── 下载 onboard 二进制 ──────────────────
-install_onboard() {
-    step "安装 onboard 工具"
+verify_onboard() {
+    step "检查 onboard 工具"
 
     local onboard_bin="$INSTALL_DIR/bin/iris-onboard"
-    mkdir -p "$INSTALL_DIR/bin"
 
-    # 尝试从 GitHub Release 下载预编译二进制
-    local download_url="https://github.com/Lianues/Iris/releases/latest/download/iris-onboard-linux-${ARCH}"
-
-    info "正在下载 iris-onboard (${ARCH})..."
-    if curl -fsSL --connect-timeout 10 --max-time 120 -o "$onboard_bin" "$download_url" 2>/dev/null; then
-        chmod +x "$onboard_bin"
-        chown iris:iris "$onboard_bin"
-        info "iris-onboard 下载完成"
+    if [ -x "$onboard_bin" ]; then
+        info "iris-onboard 已就绪：$onboard_bin"
     else
-        warn "iris-onboard 下载失败（Release 可能尚未发布）"
+        warn "iris-onboard 未包含在安装包中（fallback 构建模式不含 onboard 二进制）"
         warn "你仍然可以手动编辑配置文件：$INSTALL_DIR/data/configs/"
-        # 创建一个 fallback 脚本
-        cat > "$onboard_bin" << 'FALLBACK_EOF'
-#!/bin/bash
-echo ""
-echo "iris-onboard 尚未安装（预编译二进制下载失败）"
-echo ""
-echo "请手动编辑配置文件："
-echo "  nano /opt/iris/data/configs/llm.yaml      # 填写 API Key"
-echo "  nano /opt/iris/data/configs/platform.yaml  # 选择平台类型"
-echo ""
-echo "或者在 onboard/ 目录中自行构建："
-echo "  cd /opt/iris/onboard && bun install && bun run build"
-echo ""
-FALLBACK_EOF
-        chmod +x "$onboard_bin"
     fi
 }
 
-# ── 安装全局命令 ──────────────────────────
 install_cli() {
     step "安装 iris 命令"
 
-    cat > "$BIN_DIR/iris" << 'CLI_EOF'
-#!/usr/bin/env bash
-# ==========================================
-#  Iris CLI Wrapper
-#  用法：
-#    iris                    启动 Iris（前台运行）
-#    iris start              同上
-#    iris onboard            交互式配置引导
-#    iris service <cmd>      管理 systemd 服务
-#                            cmd: start | stop | restart | status | logs
-#    iris update             更新 Iris 到最新版本
-#    iris help               显示帮助
-# ==========================================
+    local cli_path="$BIN_DIR/iris"
 
+    # 生成 CLI wrapper，内嵌安装目录
+    cat > "$cli_path" << CLIEOF
+#!/usr/bin/env bash
+# Iris CLI Wrapper (自动生成)
 set -euo pipefail
 
-IRIS_DIR="/opt/iris"
-IRIS_USER="iris"
+IRIS_DIR="$INSTALL_DIR"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+RED='\\033[0;31m'
+GREEN='\\033[0;32m'
+CYAN='\\033[0;36m'
+BOLD='\\033[1m'
+NC='\\033[0m'
 
-case "${1:-start}" in
+case "\${1:-start}" in
     onboard)
-        if [ -x "$IRIS_DIR/bin/iris-onboard" ]; then
-            exec "$IRIS_DIR/bin/iris-onboard" "$IRIS_DIR"
+        if [ -x "\$IRIS_DIR/bin/iris-onboard" ]; then
+            exec "\$IRIS_DIR/bin/iris-onboard" "\$IRIS_DIR"
         else
-            echo -e "${RED}iris-onboard 未安装${NC}"
-            echo "请手动编辑配置：$IRIS_DIR/data/configs/"
+            echo -e "\${RED}iris-onboard 未安装\${NC}"
+            echo "请手动编辑配置：\$IRIS_DIR/data/configs/"
             exit 1
         fi
         ;;
 
     start|"")
-        if [ ! -f "$IRIS_DIR/dist/index.js" ]; then
-            echo -e "${RED}Iris 尚未构建，请先运行：cd $IRIS_DIR && npm run build${NC}"
+        if [ ! -f "\$IRIS_DIR/dist/index.js" ]; then
+            echo -e "\${RED}Iris 尚未构建。\${NC}"
             exit 1
         fi
-        echo -e "${GREEN}正在启动 Iris...${NC}"
-        cd "$IRIS_DIR"
+        echo -e "\${GREEN}正在启动 Iris...\${NC}"
+        cd "\$IRIS_DIR"
         exec node dist/index.js
         ;;
 
     service)
         shift
-        case "${1:-status}" in
-            start)   sudo systemctl start iris   && echo -e "${GREEN}Iris 已启动${NC}" ;;
-            stop)    sudo systemctl stop iris    && echo -e "${GREEN}Iris 已停止${NC}" ;;
-            restart) sudo systemctl restart iris && echo -e "${GREEN}Iris 已重启${NC}" ;;
+        case "\${1:-status}" in
+            start)   sudo systemctl start iris   && echo -e "\${GREEN}Iris 已启动\${NC}" ;;
+            stop)    sudo systemctl stop iris    && echo -e "\${GREEN}Iris 已停止\${NC}" ;;
+            restart) sudo systemctl restart iris && echo -e "\${GREEN}Iris 已重启\${NC}" ;;
             status)  systemctl status iris ;;
             logs)    journalctl -u iris -f --no-pager ;;
-            enable)  sudo systemctl enable iris  && echo -e "${GREEN}已设为开机自启${NC}" ;;
-            disable) sudo systemctl disable iris && echo -e "${GREEN}已取消开机自启${NC}" ;;
+            enable)  sudo systemctl enable iris  && echo -e "\${GREEN}已设为开机自启\${NC}" ;;
+            disable) sudo systemctl disable iris && echo -e "\${GREEN}已取消开机自启\${NC}" ;;
             *)       echo "用法：iris service {start|stop|restart|status|logs|enable|disable}" ;;
         esac
         ;;
 
     update)
-        echo -e "${CYAN}正在更新 Iris...${NC}"
-        cd "$IRIS_DIR"
-        sudo -u "$IRIS_USER" git pull origin main
-        sudo -u "$IRIS_USER" npm run setup
-        sudo -u "$IRIS_USER" npm run build
-        echo -e "${GREEN}更新完成！使用 iris service restart 重启服务${NC}"
+        echo -e "\${CYAN}正在更新 Iris...\${NC}"
+        curl -fsSL https://raw.githubusercontent.com/$GH_REPO/main/deploy/linux/install.sh | bash
         ;;
 
     help|--help|-h)
         echo ""
-        echo -e "${BOLD}Iris AI Chat Framework${NC}"
+        echo -e "\${BOLD}Iris AI Chat Framework\${NC}"
         echo ""
         echo "用法：iris <command>"
         echo ""
@@ -343,37 +501,50 @@ case "${1:-start}" in
         echo "  update             更新到最新版本"
         echo "  help               显示此帮助"
         echo ""
-        echo "配置文件：$IRIS_DIR/data/configs/"
-        echo "服务日志：journalctl -u iris -f"
+        echo "配置文件：\$IRIS_DIR/data/configs/"
         echo ""
         ;;
 
     *)
-        echo "未知命令：$1"
+        echo "未知命令：\$1"
         echo "运行 iris help 查看帮助"
         exit 1
         ;;
 esac
-CLI_EOF
+CLIEOF
 
-    chmod +x "$BIN_DIR/iris"
-    info "已安装 iris 命令到 $BIN_DIR/iris"
+    chmod +x "$cli_path"
+    info "已安装 iris 命令到 $cli_path"
+
+    # 检查 PATH
+    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
+        warn "$BIN_DIR 不在 PATH 中。请添加到 shell 配置："
+        warn "  echo 'export PATH=\"$BIN_DIR:\\\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
+    fi
 }
 
-# ── 安装 systemd 服务 ────────────────────
 install_service() {
+    # Termux 或非 root 不安装 systemd
+    if $IS_TERMUX || ! $IS_ROOT; then
+        return 0
+    fi
+
     step "安装 systemd 服务"
 
-    # 检查 systemd 是否可用
     if ! command -v systemctl &>/dev/null; then
         warn "系统不支持 systemd，跳过服务安装"
         warn "你可以手动启动：cd $INSTALL_DIR && node dist/index.js"
         return 0
     fi
 
-    cp "$INSTALL_DIR/deploy/linux/iris.service" /etc/systemd/system/iris.service
+    local service_src="$INSTALL_DIR/deploy/linux/iris.service"
+    if [ ! -f "$service_src" ]; then
+        warn "服务文件不存在，跳过 systemd 安装"
+        return 0
+    fi
 
-    # 替换安装路径（如果自定义了）
+    cp "$service_src" /etc/systemd/system/iris.service
+
     if [ "$INSTALL_DIR" != "/opt/iris" ]; then
         sed -i "s|/opt/iris|$INSTALL_DIR|g" /etc/systemd/system/iris.service
     fi
@@ -382,10 +553,12 @@ install_service() {
     systemctl enable iris
 
     info "systemd 服务已安装并设为开机自启"
-    info "注意：服务尚未启动，请先运行 iris onboard 完成配置"
 }
 
-# ── 打印完成信息 ──────────────────────────
+# ==========================================
+#  完成信息
+# ==========================================
+
 print_success() {
     echo ""
     echo -e "${GREEN}${BOLD}============================================${NC}"
@@ -401,19 +574,33 @@ print_success() {
     echo -e "     nano $INSTALL_DIR/data/configs/llm.yaml"
     echo -e "     nano $INSTALL_DIR/data/configs/platform.yaml"
     echo ""
-    echo -e "  ${CYAN}3.${NC} 启动服务："
-    echo -e "     ${BOLD}iris service start${NC}    # 后台运行"
-    echo -e "     ${BOLD}iris start${NC}            # 前台运行"
+    echo -e "  ${CYAN}3.${NC} 启动："
+
+    if $IS_TERMUX; then
+        echo -e "     ${BOLD}iris start${NC}"
+    elif $IS_ROOT; then
+        echo -e "     ${BOLD}iris service start${NC}    # 后台运行"
+        echo -e "     ${BOLD}iris start${NC}            # 前台运行"
+    else
+        echo -e "     ${BOLD}iris start${NC}"
+    fi
+
     echo ""
-    echo -e "  ${CYAN}其他命令：${NC}"
-    echo -e "     iris service status    # 查看状态"
-    echo -e "     iris service logs      # 查看日志"
-    echo -e "     iris update            # 更新版本"
-    echo -e "     iris help              # 查看帮助"
-    echo ""
+
+    if ! $IS_TERMUX && $IS_ROOT; then
+        echo -e "  ${CYAN}其他命令：${NC}"
+        echo -e "     iris service status    # 查看状态"
+        echo -e "     iris service logs      # 查看日志"
+        echo -e "     iris update            # 更新版本"
+        echo -e "     iris help              # 查看帮助"
+        echo ""
+    fi
 }
 
-# ── 主流程 ────────────────────────────────
+# ==========================================
+#  主流程
+# ==========================================
+
 main() {
     echo ""
     success "╔══════════════════════════════════════╗"
@@ -422,14 +609,14 @@ main() {
     success "╚══════════════════════════════════════╝"
     echo ""
 
-    check_root
+    detect_environment
     detect_os
     install_dependencies
     install_node
     create_user
-    clone_and_build
+    download_and_extract
     init_config
-    install_onboard
+    verify_onboard
     install_cli
     install_service
     print_success

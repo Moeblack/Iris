@@ -247,7 +247,7 @@ async function executeSingle(
     if (!shouldAutoApprove(call, policy)) {
       // 需要用户批准
       toolState.transition(invocationId, 'awaiting_approval');
-      const approved = await toolState.waitForApproval(invocationId);
+      const approved = await toolState.waitForApproval(invocationId, signal);
       if (!approved) {
         return {
           functionResponse: {
