@@ -236,7 +236,11 @@ async function executeSingle(
 
   if (toolState && invocationId) {
     if (!shouldAutoApprove(call, effectivePolicy)) {
-      // 需要用户批准
+      // ──────────────────────────────────────────────────────────
+      // ⚠️ 审批阻塞点：此处会阻塞直到平台层调用 toolState.transition(id, 'executing')。
+      // 不支持交互审批的平台（如 WXWork）必须在 tool:update 事件中自动批准，
+      // 否则工具执行会永远挂起。参见 WXWorkPlatform.setupBackendListeners()。
+      // ──────────────────────────────────────────────────────────
       toolState.transition(invocationId, 'awaiting_approval');
       const approved = await toolState.waitForApproval(invocationId, signal);
       if (!approved) {

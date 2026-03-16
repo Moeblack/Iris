@@ -281,9 +281,15 @@ export class WXWorkPlatform extends PlatformAdapter {
   }
 
   private setupBackendListeners(): void {
-    // ---- 工具审批 + 状态展示 ----
-    // 企业微信不支持交互式审批（无法编辑/撤回消息），
-    // 因此遇到 awaiting_approval 状态的工具调用，自动批准执行。
+    // ──────────────────────────────────────────────────────────
+    // ⚠️ TODO: 实现企业微信工具调用审批功能
+    //
+    // 当前实现：自动批准所有工具调用（方案 A）。
+    // 企业微信 AI Bot API 不支持消息编辑/撤回，无法实现交互式审批 UI。
+    // 未来如果企微 SDK 支持卡片消息交互或回调按钮，应在此处实现：
+    //   1. 向用户发送包含「批准/拒绝」按钮的卡片消息
+    //   2. 收到用户点击回调后调用 this.backend.approveTool(id, approved)
+    // ──────────────────────────────────────────────────────────
     this.backend.on('tool:update', (sid: string, invocations: Array<{
       id: string;
       toolName: string;
@@ -291,7 +297,7 @@ export class WXWorkPlatform extends PlatformAdapter {
       args: Record<string, unknown>;
       createdAt: number;
     }>) => {
-      // 自动批准所有等待审批的工具
+      // ⚠️ 临时方案：自动批准所有等待审批的工具（跳过人工审批）
       for (const inv of invocations) {
         if (inv.status === 'awaiting_approval') {
           try {
