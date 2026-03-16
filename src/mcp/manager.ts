@@ -5,7 +5,7 @@
  */
 
 import { MCPConfig } from '../config/types';
-import { ToolDefinition, ParameterSchema } from '../types';
+import { ToolDefinition } from '../types';
 import { MCPClient } from './client';
 import { MCPServerInfo } from './types';
 import { createLogger } from '../logger';
@@ -105,7 +105,7 @@ export class MCPManager {
  */
 function convertInputSchema(schema: Record<string, unknown>): {
   type: 'object';
-  properties: Record<string, ParameterSchema>;
+  properties: Record<string, Record<string, unknown>>;
   required?: string[];
 } | undefined {
   // 展开所有 $ref 引用
@@ -125,7 +125,7 @@ function convertInputSchema(schema: Record<string, unknown>): {
 
   return clean as {
     type: 'object';
-    properties: Record<string, ParameterSchema>;
+    properties: Record<string, Record<string, unknown>>;
     required?: string[];
   };
 }

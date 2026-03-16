@@ -13,6 +13,7 @@ import {
 } from '../../types';
 import { FormatAdapter, StreamDecodeState } from './types';
 import { consumeCallId, normalizeCallId, resolveCallId } from './tool-call-ids';
+import { sanitizeSchemaForOpenAI } from './schema-sanitizer';
 
 export class OpenAICompatibleFormat implements FormatAdapter {
   constructor(private model: string) {}
@@ -133,7 +134,7 @@ export class OpenAICompatibleFormat implements FormatAdapter {
       const allDecls = request.tools.flatMap(t => t.functionDeclarations);
       body.tools = allDecls.map(decl => ({
         type: 'function',
-        function: { name: decl.name, description: decl.description, parameters: decl.parameters },
+        function: { name: decl.name, description: decl.description, parameters: sanitizeSchemaForOpenAI(decl.parameters) },
       }));
     }
 

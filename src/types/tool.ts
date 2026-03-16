@@ -5,22 +5,14 @@
  * 声明格式遵循 Gemini FunctionDeclaration 规范。
  */
 
-/**
- * JSON Schema 参数描述
- *
- * 使用 Record<string, unknown> 以支持完整的 JSON Schema 特性
- * （包括 anyOf、additionalProperties 等），
- * 下游 LLM 格式层会直接 JSON.stringify 透传给 API。
- */
-export type ParameterSchema = Record<string, unknown>;
-
 /** 函数声明（供 LLM 识别的工具描述） */
 export interface FunctionDeclaration {
   name: string;
   description: string;
+  /** JSON Schema 参数描述，LLM 格式层按 provider 需要做降级后透传给 API */
   parameters?: {
     type: 'object';
-    properties: Record<string, ParameterSchema>;
+    properties: Record<string, Record<string, unknown>>;
     required?: string[];
   };
 }
