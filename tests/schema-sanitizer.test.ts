@@ -26,6 +26,8 @@ describe('sanitizeSchemaForGemini', () => {
     };
     const result = sanitizeSchemaForGemini(schema) as any;
     expect(result.properties.doc_type.enum).toEqual(['3', '10']);
+    // type 应从 integer 同步改为 string（enum 值已是字符串）
+    expect(result.properties.doc_type.type).toBe('string');
   });
 
   it('删除 additionalProperties', () => {
@@ -308,6 +310,7 @@ describe('三个 sanitizer 的差异化行为', () => {
     expect(result.title).toBeUndefined();
     expect(result.properties.docid.title).toBeUndefined();
     expect(result.properties.doc_type.enum).toEqual(['3', '10']);
+    expect(result.properties.doc_type.type).toBe('string');  // integer → string（enum 已转字符串）
     expect(result.properties.values.additionalProperties).toBeUndefined();
     // required 应保留
     expect(result.required).toEqual(['docid']);
