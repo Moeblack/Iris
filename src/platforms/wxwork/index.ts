@@ -166,6 +166,13 @@ export class WXWorkPlatform extends PlatformAdapter {
   private backend: Backend;
 
   /**
+   * 每个用户/群的当前 sessionId。
+   * key = chatKey（私聊 `dm:{userId}`，群聊 `group:{chatId}`）
+   * 用 /new 时生成新 sessionId，实现多会话管理。
+   */
+  private activeSessions = new Map<string, string>();
+
+  /**
    * 保存每个 sessionId 对应的原始 WsFrame，用于回复。
    * 企微回复必须携带原始帧的 req_id，因此需保留。
    */
@@ -408,39 +415,116 @@ export class WXWorkPlatform extends PlatformAdapter {
 
   // ============ 入站消息处理 ============
 
+  /**
+   * 生成 chatKey（用于 activeSessions 的 key）
+   * 私聊: `dm:{userId}`  群聊: `group:{chatId}`
+   */
+  private chatKey(chatType: string, chatId: string, senderId: string): string {
+    return chatType === 'group' ? `group:${chatId}` : `dm:${senderId}`;
+  }
+
+  /**
+   * 获取或创建当前 chatKey 对应的 sessionId
+   */
+  private getSessionId(chatKey: string): string {
+    let sid = this.activeSessions.get(chatKey);
+    if (!sid) {
+      sid = `wxwork-${chatKey}-${Date.now()}`;
+      this.activeSessions.set(chatKey, sid);
+    }
+    return sid;
+  }
+
+  /**
+   * 处理 slash 指令。返回 true 表示已处理，不需要再发给 Backend。
+   */
+  private async handleCommand(
+    text: string,
+    frame: WsFrame,
+    ck: string,
+  ): Promise<boolean> {
+    const cmd = text.trim().toLowerCase();
+    const reply = (content: string) => {
+      const streamId = generateReqId('stream');
+      return this.wsClient.replyStream(frame, streamId, content, true);
+    };
+
+    if (cmd === '/new') {
+      const newSid = `wxwork-${ck}-${Date.now()}`;
+      this.activeSessions.set(ck, newSid);
+      await reply('✅ 已新建对话，上下文已清空。');
+      return true;
+    }
+
+    if (cmd === '/clear') {
+      const sid = this.activeSessions.get(ck);
+      if (sid) {
+        await this.backend.clearSession(sid);
+      }
+      await reply('✅ 当前对话历史已清空。');
+      return true;
+    }
+
+    if (cmd === '/model' || cmd === '/models') {
+      const models = this.backend.listModels();
+      const lines = models.map(m =>
+        `${m.current ? '👉 ' : '　 '}**${m.modelName}** → \`${m.modelId}\``
+      );
+      await reply(`当前可用模型：\n${lines.join('\n')}\n\n切换模型请发送 \`/model 模型名\``);
+      return true;
+    }
+
+    if (cmd.startsWith('/model ')) {
+      const modelName = text.slice('/model '.length).trim();
+      try {
+        const result = this.backend.switchModel(modelName);
+        await reply(`✅ 模型已切换为 **${result.modelName}** → \`${result.modelId}\``);
+      } catch {
+        await reply(`❌ 未找到模型 "${modelName}"。发送 /model 查看可用列表。`);
+      }
+      return true;
+    }
+
+    if (cmd === '/help') {
+      await reply([
+        '📋 **可用指令**',
+        '`/new` — 新建对话（清空上下文）',
+        '`/clear` — 清空当前对话历史',
+        '`/model` — 查看可用模型',
+        '`/model 模型名` — 切换模型',
+        '`/help` — 显示本帮助',
+      ].join('\n'));
+      return true;
+    }
+
+    return false;
+  }
+
   private async handleIncomingMessage(frame: WsFrame): Promise<void> {
     const body = frame.body as MessageBody;
-
-    // 字段解析与官方插件保持一致：统一用 body.from.userid
     const senderId = body.from.userid;
     const chatId = body.chatid || senderId;
     const chatType = body.chattype ?? 'single';
 
-    if (!chatId) {
-      logger.warn('收到无 chatId 的消息，跳过');
-      return;
-    }
-
-    // sessionId 生成规则
-    const sessionId = chatType === 'group'
-      ? `wxwork-${chatId}`
-      : `wxwork-dm-${senderId}`;
-
-    // 解析消息内容
     const parsed = parseMessageBody(body);
-
-    // 既无文本也无图片则跳过
     if (!parsed.text && parsed.imageUrls.length === 0) {
-      logger.debug('空消息，跳过');
       return;
     }
 
-    logger.info(`收到消息 [${sessionId}] from=${senderId}: text="${parsed.text.slice(0, 50)}" images=${parsed.imageUrls.length}`);
+    const ck = this.chatKey(chatType, chatId, senderId);
+    const sessionId = this.getSessionId(ck);
 
-    // 保存帧（用于回复）
+    logger.info(`[${sessionId}] from=${senderId}: text="${parsed.text.slice(0, 50)}" images=${parsed.imageUrls.length}`);
+
+    // 指令处理（/new /clear /model /help）
+    if (parsed.text.startsWith('/')) {
+      const handled = await this.handleCommand(parsed.text, frame, ck);
+      if (handled) return;
+    }
+
     this.pendingFrames.set(sessionId, frame);
 
-    // 流式模式下先发 thinking 占位（与官方插件一致）
+    // 流式模式先发 thinking 占位
     if (this.backend.isStreamEnabled()) {
       const streamId = generateReqId('stream');
       this.streamStates.set(sessionId, { streamId, buffer: '', dirty: false, throttleTimer: null });
@@ -451,13 +535,11 @@ export class WXWorkPlatform extends PlatformAdapter {
       }
     }
 
-    // 下载图片（带超时保护，与官方插件一致）
     let images: ImageInput[] | undefined;
     if (parsed.imageUrls.length > 0) {
       images = await this.downloadImages(parsed.imageUrls, parsed.imageAesKeys);
     }
 
-    // 调用 Backend
     try {
       await this.backend.chat(sessionId, parsed.text, images);
     } catch (err) {
