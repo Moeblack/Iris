@@ -189,9 +189,16 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
         uncommittedStreamPartsRef.current = [];
         setStreamingParts([]);
         setMessages((prev) => {
-          if (normalizedParts.length === 0) return prev;
-          if (prev.length === 0) return [{ id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta }];
+          if (normalizedParts.length === 0 && !meta) return prev;
           const last = prev[prev.length - 1];
+          // parts 为空且有 meta：仅更新最后一条 assistant 消息的 meta
+          if (normalizedParts.length === 0) {
+            if (!last || last.role !== 'assistant') return prev;
+            const copy = [...prev];
+            copy[copy.length - 1] = { ...last, ...meta };
+            return copy;
+          }
+          if (prev.length === 0) return [{ id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta }];
           if (last.role !== 'assistant') return [...prev, { id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta }];
           const copy = [...prev];
           copy[copy.length - 1] = { ...last, parts: mergeMessageParts([...last.parts, ...normalizedParts]), ...meta };
@@ -284,13 +291,18 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
   // ============ 键盘输入 ============
   useKeyboard((key) => {
     if (viewMode === 'settings') return;
-    // Ctrl+C：生成中中断
+    // Ctrl+C：退出 TUI（跨平台标准行为）
     if (key.ctrl && key.name === 'c') {
-      if (isGenerating) {
-        onAbort();
-      }
+      onExit();
       return;
     }
+    // ESC：生成中中断 / 子视图返回
+    if (key.name === 'escape') {
+      if (isGenerating) { onAbort(); return; }
+      if (viewMode === 'session-list' || viewMode === 'model-list') { setViewMode('chat'); return; }
+      return;
+    }
+
     // 工具审批拦截：左右/上下箭头切换选项，回车确认
     if (isGenerating && pendingApprovals.length > 0) {
       if (key.name === 'left' || key.name === 'up' || key.name === 'right' || key.name === 'down') {
@@ -314,7 +326,7 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
       else if (key.name === 'enter' || key.name === 'return') {
         const selected = sessionList[selectedIndex];
         if (selected) { setMessages([]); toolInvocationsRef.current = []; setViewMode('chat'); onLoadSession(selected.id).catch(() => {}); }
-      } else if (key.name === 'escape') setViewMode('chat');
+      }
       return;
     }
     if (viewMode === 'model-list') {
@@ -329,10 +341,9 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
           if ('contextWindow' in result) setCurrentContextWindow(result.contextWindow);
           setViewMode('chat');
         }
-      } else if (key.name === 'escape') setViewMode('chat');
+      }
       return;
     }
-    if (key.name === 'escape') onExit();
   });
 
   // ============ 消息逻辑 ============
@@ -342,16 +353,10 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
   const displayMessages = useMemo(() => lastIsActiveAssistant ? messages.slice(0, -1) : messages, [messages, lastIsActiveAssistant]);
 
   // ============ 状态栏 ============
-  const statusText = useMemo(() => {
-    let s = currentModelName;
-    if (currentModelId) s += ` (${currentModelId})`;
-    s += `  \u00b7  ${(modeName ?? 'normal').toUpperCase()}`;
-    s += '  \u00b7  ctx: ';
-    s += contextTokens > 0 ? contextTokens.toLocaleString() : '-';
-    if (currentContextWindow) s += `/${currentContextWindow.toLocaleString()}`;
-    if (contextTokens > 0 && currentContextWindow) s += ` (${Math.round(contextTokens / currentContextWindow * 100)}%)`;
-    return s;
-  }, [currentModelName, currentModelId, modeName, contextTokens, currentContextWindow]);
+  const modeNameCapitalized = (modeName ?? 'normal').charAt(0).toUpperCase() + (modeName ?? 'normal').slice(1);
+  const contextStr = contextTokens > 0 ? contextTokens.toLocaleString() : '-';
+  const contextLimitStr = currentContextWindow ? `/${currentContextWindow.toLocaleString()}` : '';
+  const contextPercent = contextTokens > 0 && currentContextWindow ? ` (${Math.round(contextTokens / currentContextWindow * 100)}%)` : '';
 
   // ============ 设置视图 ============
   if (viewMode === 'settings') {
@@ -420,29 +425,22 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      {/* Logo — 无消息时居中大 Logo，有消息时紧凑头部 */}
-      {!hasMessages ? (
-        <box flexDirection="column" flexGrow={1} padding={1}>
-          <box flexDirection="column" borderStyle="rounded" padding={2} borderColor={C.primary}>
+      {/* Logo — 无消息时居中大 Logo */}
+      {!hasMessages && (
+        <box flexDirection="column" flexGrow={1} padding={1} alignItems="center" justifyContent="center">
+          <box flexDirection="column" border={false} padding={2} alignItems="center">
             <text fg={C.primary}>
-              <strong>{'  ╦╦═╗╦╔═╗'}</strong>
+              <strong>{'╦╦═╗╦╔═╗'}</strong>
             </text>
             <text fg={C.primary}>
-              <strong>{'  ║╠╦╝║╚═╗'}</strong>
+              <strong>{'║╠╦╝║╚═╗'}</strong>
             </text>
             <text fg={C.primary}>
-              <strong>{'  ╩╩╚═╩╚═╝'}</strong>
+              <strong>{'╩╩╚═╩╚═╝'}</strong>
             </text>
             <text> </text>
-            <text fg={C.primaryLight}>模块化 AI 智能代理框架</text>
+            <text fg={C.dim}>模块化 AI 智能代理框架</text>
           </box>
-          <text> </text>
-          <text fg={C.dim}>输入消息开始对话  ·  输入 / 查看可用指令</text>
-        </box>
-      ) : (
-        <box paddingLeft={1} flexShrink={0}>
-          <text fg={C.primary}><strong>IRIS</strong></text>
-          <text fg={C.dim}>  ·  {currentModelName}</text>
         </box>
       )}
 
@@ -470,9 +468,33 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
         )}
       </scrollbox>}
 
-      {/* 状态栏 */}
-      <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-        <text fg={C.dim}><em>{statusText}</em></text>
+      {/* 底部输入区 */}
+      <box flexDirection="column" flexShrink={0} paddingX={1} paddingBottom={1} paddingTop={hasMessages ? 1 : 0}>
+        {pendingApprovals.length > 0 ? (
+          <box flexDirection="column" borderStyle="single" borderColor={C.warn} paddingLeft={1} paddingRight={1} paddingY={0}>
+            <text>
+              <span fg={C.warn}><strong>? </strong></span>
+              <span fg={C.text}>确认执行 </span>
+              <span fg={C.warn}><strong>{pendingApprovals[0].toolName}</strong></span>
+              <span fg={C.dim}>  (Y) 批准  (N) 拒绝</span>
+              {pendingApprovals.length > 1 ? <span fg={C.dim}>{`  (剩余 ${pendingApprovals.length - 1} 个)`}</span> : null}
+            </text>
+          </box>
+        ) : (
+          <box flexDirection="column" borderStyle="single" borderColor={isGenerating ? C.dim : '#3b3b3b'} padding={1} paddingBottom={0}>
+            <InputBar disabled={isGenerating} onSubmit={handleSubmit} />
+            <box flexDirection="row" marginTop={1}>
+              <text fg={C.primaryLight}>{modeNameCapitalized}</text>
+              <text fg={C.dim}>   </text>
+              <text fg={C.textSec}>{currentModelName}</text>
+              <text fg={C.dim}>  {currentModelId}</text>
+              <text fg={C.dim}>   ·   ctx: {contextStr}{contextLimitStr}{contextPercent}</text>
+            </box>
+          </box>
+        )}
+        <box flexDirection="row" justifyContent="flex-end" paddingTop={0} paddingRight={1}>
+          <text fg={C.dim}>{isGenerating ? 'esc 中断生成' : 'tab 补全'}  ·  ctrl+c 退出</text>
+        </box>
       </box>
 
       {/* 工具审批 / 输入栏 */}

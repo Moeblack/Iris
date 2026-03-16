@@ -113,12 +113,9 @@ export function InputBar({ disabled, onSubmit }: InputBarProps) {
       {/* 输入区域 */}
       <box
         flexDirection="row"
-        borderStyle="single"
-        borderColor={disabled ? C.dim : C.borderActive}
-        paddingLeft={1}
-        paddingRight={1}
+        border={false}
       >
-        <text fg={disabled ? C.dim : C.accent}><strong>{'\u276F '}</strong></text><InputDisplay
+        <text fg={disabled ? C.dim : C.accent}><strong>{'\u276F '} </strong></text><InputDisplay
           value={value}
           cursor={inputState.cursor}
           isActive={!disabled}
