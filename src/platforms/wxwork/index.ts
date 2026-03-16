@@ -222,6 +222,40 @@ export class WXWorkPlatform extends PlatformAdapter {
   private setupBackendListeners(): void {
     // ---- 流式输出 ----
 
+    // ---- 工具执行状态 → 流式更新 ----
+    this.backend.on('tool:update', (sid: string, invocations: Array<{
+      toolName: string;
+      status: string;
+      args: Record<string, unknown>;
+    }>) => {
+      const frame = this.pendingFrames.get(sid);
+      const state = this.streamStates.get(sid);
+      if (!frame || !state) return;
+
+      // 构建工具状态摘要文本
+      const statusIcons: Record<string, string> = {
+        queued: '⏳',
+        executing: '🔧',
+        success: '✅',
+        error: '❌',
+        streaming: '📡',
+      };
+      const toolLines = invocations.map(inv => {
+        const icon = statusIcons[inv.status] || '⏳';
+        return `${icon} \`${inv.toolName}\` ${inv.status}`;
+      });
+      const toolSummary = toolLines.join('\n');
+
+      // 用工具状态更新流式消息（不累积到 buffer，只是临时展示）
+      // 当后续有 stream:chunk 文本到来时，buffer 会覆盖这个临时内容
+      const displayText = state.buffer
+        ? `${state.buffer}\n\n---\n${toolSummary}`
+        : toolSummary;
+      this.wsClient.replyStream(frame, state.streamId, displayText, false).catch((err) => {
+        logger.error(`工具状态更新失败 (session=${sid}):`, err);
+      });
+    });
+
     this.backend.on('stream:start', (sid: string) => {
       // streamState 已在 handleIncomingMessage 中创建（thinking 占位时），
       // 此处复用同一个 streamId，不再覆盖。
