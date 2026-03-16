@@ -246,16 +246,11 @@ export class WXWorkPlatform extends PlatformAdapter {
         });
         this.streamStates.delete(sid);
       } else {
-        // 纯非流式：直接回复 markdown
-        const chunks = splitText(text, MESSAGE_MAX_LENGTH);
-        for (const chunk of chunks) {
-          this.wsClient.reply(frame, {
-            msgtype: 'markdown',
-            markdown: { content: chunk },
-          }).catch((err) => {
-            logger.error(`回复失败 (session=${sid}):`, err);
-          });
-        }
+        // 纯非流式：也走 replyStream(finish=true) 一次性发送（与官方插件一致）
+        const streamId = generateReqId('stream');
+        this.wsClient.replyStream(frame, streamId, text, true).catch((err) => {
+          logger.error(`回复失败 (session=${sid}):`, err);
+        });
       }
     });
 
@@ -272,10 +267,9 @@ export class WXWorkPlatform extends PlatformAdapter {
         this.wsClient.replyStream(frame, state.streamId, errorText, true).catch(() => {});
         this.streamStates.delete(sid);
       } else {
-        this.wsClient.reply(frame, {
-          msgtype: 'text',
-          text: { content: errorText },
-        }).catch(() => {});
+        // 无流式状态也走 replyStream(finish=true)（与官方插件一致）
+        const streamId = generateReqId('stream');
+        this.wsClient.replyStream(frame, streamId, errorText, true).catch(() => {});
       }
     });
 
