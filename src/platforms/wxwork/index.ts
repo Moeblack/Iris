@@ -9,6 +9,12 @@
  *                 done → replyStream(最终文本, finish=true)
  *   出站（非流式）：response → reply(markdown)
  *
+ * 并发控制：
+ *   每个 chatKey（私聊/群聊）同一时间只处理一条消息。
+ *   AI 输出期间用户发的消息暂存到消息缓冲区，等 done 后合并为一条发送。
+ *   /stop — 中止当前回复，关闭流式消息。
+ *   /flush — 打断等待，立即将缓冲消息发送给 AI。
+ *
  * SDK 参考：https://github.com/WecomTeam/aibot-node-sdk
  * 官方插件参考：https://github.com/WecomTeam/wecom-openclaw-plugin
  */
@@ -159,6 +165,35 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
 
+// ============ 并发控制 ============
+
+/**
+ * 每个 chatKey 的运行时状态。
+ *
+ * 一个 chatKey 同一时间只有一个 chat 请求在执行。
+ * AI 输出期间用户发的后续消息暂存到 pendingMessages 数组。
+ * 当前轮 done 后，pendingMessages 合并为一条用户消息发送给 AI。
+ */
+interface ChatState {
+  /** 当前是否有 chat 请求在执行 */
+  busy: boolean;
+  /** 当前正在使用的 sessionId */
+  sessionId: string;
+  /** 当前流式回复的原始帧（回复时需要） */
+  frame: WsFrame | null;
+  /** 流式回复状态 */
+  stream: {
+    streamId: string;
+    buffer: string;
+    dirty: boolean;
+    throttleTimer: ReturnType<typeof setTimeout> | null;
+  } | null;
+  /** 是否已被 /stop 标记为中止 */
+  stopped: boolean;
+  /** AI 输出期间暂存的用户消息 */
+  pendingMessages: Array<{ text: string; frame: WsFrame }>;
+}
+
 // ============ 平台适配器 ============
 
 export class WXWorkPlatform extends PlatformAdapter {
@@ -176,26 +211,10 @@ export class WXWorkPlatform extends PlatformAdapter {
   private activeSessions = new Map<string, string>();
 
   /**
-   * 保存每个 sessionId 对应的原始 WsFrame，用于回复。
-   * 企微回复必须携带原始帧的 req_id，因此需保留。
+   * 每个 chatKey 的运行时状态，负责并发控制。
+   * 用于实现：busy 锁、消息缓冲、/stop 中止、/flush 立即推送。
    */
-  private pendingFrames = new Map<string, WsFrame>();
-
-  /**
-   * 流式回复状态。
-   * 企微的 replyStream 每次发送的是累积后的完整文本（全量替换），不是增量。
-   * 同一个 streamId 贯穿 thinking 占位和后续流式回复，确保最终 finish=true 能关闭 thinking。
-   *
-   * 包含节流控制：每 STREAM_THROTTLE_MS 最多发一次 replyStream，
-   * 避免每个 LLM token 都触发一次 WebSocket 发送导致队列堆积。
-   * SDK 的串行回执机制（发一条等 ack 再发下一条）会使高频发送严重延迟。
-   */
-  private streamStates = new Map<string, {
-    streamId: string;
-    buffer: string;
-    dirty: boolean;
-    throttleTimer: ReturnType<typeof setTimeout> | null;
-  }>();
+  private chatStates = new Map<string, ChatState>();
 
   constructor(backend: Backend, config: WXWorkConfig) {
     super();
@@ -220,19 +239,48 @@ export class WXWorkPlatform extends PlatformAdapter {
   async stop(): Promise<void> {
     this.wsClient.disconnect();
     // 清理所有节流定时器
-    for (const state of this.streamStates.values()) {
-      if (state.throttleTimer) clearTimeout(state.throttleTimer);
+    for (const cs of this.chatStates.values()) {
+      if (cs.stream?.throttleTimer) clearTimeout(cs.stream.throttleTimer);
     }
-    this.pendingFrames.clear();
-    this.streamStates.clear();
+    this.chatStates.clear();
     logger.info('平台已停止');
+  }
+
+  // ============ ChatState 管理 ============
+
+  /** 获取或创建 chatKey 对应的 ChatState */
+  private getChatState(ck: string): ChatState {
+    let cs = this.chatStates.get(ck);
+    if (!cs) {
+      cs = {
+        busy: false,
+        sessionId: this.getSessionId(ck),
+        frame: null,
+        stream: null,
+        stopped: false,
+        pendingMessages: [],
+      };
+      this.chatStates.set(ck, cs);
+    }
+    // 同步 sessionId（可能被 /new、/session 改过）
+    cs.sessionId = this.getSessionId(ck);
+    return cs;
   }
 
   // ============ Backend 事件监听 ============
 
-  private setupBackendListeners(): void {
-    // ---- 流式输出 ----
+  /**
+   * 根据 sessionId 找到对应的 ChatState。
+   * Backend 事件按 sessionId 发送，需要反向查找。
+   */
+  private findChatStateBySid(sid: string): ChatState | undefined {
+    for (const cs of this.chatStates.values()) {
+      if (cs.sessionId === sid) return cs;
+    }
+    return undefined;
+  }
 
+  private setupBackendListeners(): void {
     // ---- 工具执行状态 → 流式更新 ----
     this.backend.on('tool:update', (sid: string, invocations: Array<{
       toolName: string;
@@ -242,9 +290,8 @@ export class WXWorkPlatform extends PlatformAdapter {
     }>) => {
       if (!this.showToolStatus) return;
 
-      const frame = this.pendingFrames.get(sid);
-      const state = this.streamStates.get(sid);
-      if (!frame || !state) return;
+      const cs = this.findChatStateBySid(sid);
+      if (!cs || !cs.frame || !cs.stream || cs.stopped) return;
 
       // 按创建时间排序，保证显示顺序与实际调用顺序一致
       const statusIcons: Record<string, string> = {
@@ -264,47 +311,45 @@ export class WXWorkPlatform extends PlatformAdapter {
       });
       const toolSummary = toolLines.join('\n');
 
-      const displayText = state.buffer
-        ? `${state.buffer}\n\n---\n${toolSummary}`
+      const displayText = cs.stream.buffer
+        ? `${cs.stream.buffer}\n\n---\n${toolSummary}`
         : toolSummary;
-      this.wsClient.replyStream(frame, state.streamId, displayText, false).catch((err) => {
+      this.wsClient.replyStream(cs.frame, cs.stream.streamId, displayText, false).catch((err) => {
         logger.error(`工具状态更新失败 (session=${sid}):`, err);
       });
     });
 
+    // ---- 流式输出 ----
+
     this.backend.on('stream:start', (sid: string) => {
-      // streamState 已在 handleIncomingMessage 中创建（thinking 占位时），
-      // 此处复用同一个 streamId，不再覆盖。
-      // 仅在边界情况（如非流式切换）下补建。
-      if (!this.streamStates.has(sid)) {
-        const frame = this.pendingFrames.get(sid);
-        if (!frame) return;
-        this.streamStates.set(sid, {
+      const cs = this.findChatStateBySid(sid);
+      if (!cs || cs.stopped) return;
+      // stream 已在 dispatchChat 中创建（thinking 占位时），此处复用，仅补建边界情况
+      if (!cs.stream && cs.frame) {
+        cs.stream = {
           streamId: generateReqId('stream'),
           buffer: '',
           dirty: false,
           throttleTimer: null,
-        });
+        };
       }
     });
 
     this.backend.on('stream:chunk', (sid: string, chunk: string) => {
-      const frame = this.pendingFrames.get(sid);
-      const state = this.streamStates.get(sid);
-      if (!frame || !state) return;
+      const cs = this.findChatStateBySid(sid);
+      if (!cs || !cs.frame || !cs.stream || cs.stopped) return;
 
-      state.buffer += chunk;
-      state.dirty = true;
+      cs.stream.buffer += chunk;
+      cs.stream.dirty = true;
 
       // 节流：STREAM_THROTTLE_MS 内只发一次，避免队列堆积
-      if (!state.throttleTimer) {
-        state.throttleTimer = setTimeout(() => {
-          state.throttleTimer = null;
-          if (!state.dirty) return;
-          state.dirty = false;
-          const currentFrame = this.pendingFrames.get(sid);
-          if (!currentFrame) return;
-          this.wsClient.replyStream(currentFrame, state.streamId, state.buffer, false).catch((err) => {
+      if (!cs.stream.throttleTimer) {
+        cs.stream.throttleTimer = setTimeout(() => {
+          if (!cs.stream) return;
+          cs.stream.throttleTimer = null;
+          if (!cs.stream.dirty || !cs.frame) return;
+          cs.stream.dirty = false;
+          this.wsClient.replyStream(cs.frame, cs.stream.streamId, cs.stream.buffer, false).catch((err) => {
             logger.error(`流式发送失败 (session=${sid}):`, err);
           });
         }, STREAM_THROTTLE_MS);
@@ -314,25 +359,21 @@ export class WXWorkPlatform extends PlatformAdapter {
     // ---- 非流式回复 ----
 
     this.backend.on('response', (sid: string, text: string) => {
-      const frame = this.pendingFrames.get(sid);
-      if (!frame) return;
+      const cs = this.findChatStateBySid(sid);
+      if (!cs || !cs.frame || cs.stopped) return;
 
-      const state = this.streamStates.get(sid);
-      if (state) {
-        // 清理节流定时器
-        if (state.throttleTimer) {
-          clearTimeout(state.throttleTimer);
-          state.throttleTimer = null;
+      if (cs.stream) {
+        if (cs.stream.throttleTimer) {
+          clearTimeout(cs.stream.throttleTimer);
+          cs.stream.throttleTimer = null;
         }
-        // 有流式状态说明 thinking 流已启动，用 finish=true 关闭
-        this.wsClient.replyStream(frame, state.streamId, text, true).catch((err) => {
+        this.wsClient.replyStream(cs.frame, cs.stream.streamId, text, true).catch((err) => {
           logger.error(`流式关闭失败 (session=${sid}):`, err);
         });
-        this.streamStates.delete(sid);
+        cs.stream = null;
       } else {
-        // 纯非流式：也走 replyStream(finish=true) 一次性发送（与官方插件一致）
         const streamId = generateReqId('stream');
-        this.wsClient.replyStream(frame, streamId, text, true).catch((err) => {
+        this.wsClient.replyStream(cs.frame, streamId, text, true).catch((err) => {
           logger.error(`回复失败 (session=${sid}):`, err);
         });
       }
@@ -341,47 +382,54 @@ export class WXWorkPlatform extends PlatformAdapter {
     // ---- 错误处理 ----
 
     this.backend.on('error', (sid: string, errorMsg: string) => {
-      const frame = this.pendingFrames.get(sid);
-      if (!frame) return;
+      const cs = this.findChatStateBySid(sid);
+      if (!cs || !cs.frame) return;
 
-      const state = this.streamStates.get(sid);
       const errorText = `❌ 错误: ${errorMsg}`;
 
-      if (state) {
-        if (state.throttleTimer) {
-          clearTimeout(state.throttleTimer);
-          state.throttleTimer = null;
+      if (cs.stream) {
+        if (cs.stream.throttleTimer) {
+          clearTimeout(cs.stream.throttleTimer);
+          cs.stream.throttleTimer = null;
         }
-        this.wsClient.replyStream(frame, state.streamId, errorText, true).catch(() => {});
-        this.streamStates.delete(sid);
+        this.wsClient.replyStream(cs.frame, cs.stream.streamId, errorText, true).catch(() => {});
+        cs.stream = null;
       } else {
-        // 无流式状态也走 replyStream(finish=true)（与官方插件一致）
         const streamId = generateReqId('stream');
-        this.wsClient.replyStream(frame, streamId, errorText, true).catch(() => {});
+        this.wsClient.replyStream(cs.frame, streamId, errorText, true).catch(() => {});
       }
     });
 
-    // ---- 回合完成：清理状态 + 兆底关闭流 ----
+    // ---- 回合完成：清理状态 + 兜底关闭流 + 处理缓冲消息 ----
 
     this.backend.on('done', (sid: string) => {
-      const frame = this.pendingFrames.get(sid);
-      const state = this.streamStates.get(sid);
+      const cs = this.findChatStateBySid(sid);
+      if (!cs) return;
 
-      // 流式模式下，done 表示回合结束。
-      // 如果流还没关闭（response 未触发 / 工具循环内无文本输出），用累积文本关闭。
-      if (frame && state) {
-        if (state.throttleTimer) {
-          clearTimeout(state.throttleTimer);
-          state.throttleTimer = null;
+      // 兜底关闭流
+      if (cs.frame && cs.stream) {
+        if (cs.stream.throttleTimer) {
+          clearTimeout(cs.stream.throttleTimer);
+          cs.stream.throttleTimer = null;
         }
-        const finalText = state.buffer || '✅ 处理完成。';
-        this.wsClient.replyStream(frame, state.streamId, finalText, true).catch((err) => {
-          logger.error(`done 关闭流失败 (session=${sid}):`, err);
-        });
-        this.streamStates.delete(sid);
+        if (!cs.stopped) {
+          const finalText = cs.stream.buffer || '✅ 处理完成。';
+          this.wsClient.replyStream(cs.frame, cs.stream.streamId, finalText, true).catch((err) => {
+            logger.error(`done 关闭流失败 (session=${sid}):`, err);
+          });
+        }
+        cs.stream = null;
       }
 
-      this.pendingFrames.delete(sid);
+      // 释放 busy 锁
+      cs.busy = false;
+      cs.stopped = false;
+      cs.frame = null;
+
+      // 处理缓冲消息
+      if (cs.pendingMessages.length > 0) {
+        this.flushPendingMessages(cs);
+      }
     });
   }
 
@@ -503,6 +551,8 @@ export class WXWorkPlatform extends PlatformAdapter {
         '`/session 编号` — 切换到指定会话',
         '`/model` — 查看可用模型',
         '`/model 模型名` — 切换模型',
+        '`/stop` — 中止当前 AI 回复',
+        '`/flush` — 立即发送缓冲中的消息',
         '`/help` — 显示本帮助',
       ].join('\n'));
       return true;
@@ -550,7 +600,113 @@ export class WXWorkPlatform extends PlatformAdapter {
       return true;
     }
 
+    // /stop — 中止当前 AI 回复
+    if (cmd === '/stop') {
+      const cs = this.chatStates.get(ck);
+      if (!cs || !cs.busy) {
+        await reply('ℹ️ 当前没有正在进行的回复。');
+        return true;
+      }
+      cs.stopped = true;
+      // 立即关闭流式消息
+      if (cs.frame && cs.stream) {
+        if (cs.stream.throttleTimer) {
+          clearTimeout(cs.stream.throttleTimer);
+          cs.stream.throttleTimer = null;
+        }
+        const stopText = cs.stream.buffer
+          ? `${cs.stream.buffer}\n\n⏹ _（已中止）_`
+          : '⏹ 已中止回复。';
+        this.wsClient.replyStream(cs.frame, cs.stream.streamId, stopText, true).catch(() => {});
+        cs.stream = null;
+      }
+      // Backend 后台的 LLM 调用会继续完成，但 stopped=true 会使后续事件全部忽略
+      // done 事件到来时会释放 busy 锁并处理 pendingMessages
+      logger.info(`[${cs.sessionId}] 用户中止了 AI 回复`);
+      return true;
+    }
+
+    // /flush — 打断等待，立即推送缓冲消息
+    if (cmd === '/flush') {
+      const cs = this.chatStates.get(ck);
+      if (!cs || cs.pendingMessages.length === 0) {
+        await reply('ℹ️ 当前没有缓冲中的消息。');
+        return true;
+      }
+      // 先中止当前回复
+      if (cs.busy) {
+        cs.stopped = true;
+        if (cs.frame && cs.stream) {
+          if (cs.stream.throttleTimer) {
+            clearTimeout(cs.stream.throttleTimer);
+            cs.stream.throttleTimer = null;
+          }
+          const stopText = cs.stream.buffer
+            ? `${cs.stream.buffer}\n\n⏹ _（已中止，处理新消息）_`
+            : '⏹ 已中止，处理新消息。';
+          this.wsClient.replyStream(cs.frame, cs.stream.streamId, stopText, true).catch(() => {});
+          cs.stream = null;
+        }
+        // 注意：不在此处释放 busy，done 事件会释放。
+        // 但我们需要立即处理 pending，所以手动释放。
+        cs.busy = false;
+        cs.stopped = false;
+        cs.frame = null;
+      }
+      this.flushPendingMessages(cs);
+      logger.info(`[${cs.sessionId}] 用户 /flush 立即推送缓冲消息`);
+      return true;
+    }
+
     return false;
+  }
+
+  /**
+   * 将 pendingMessages 合并为一条消息发送给 AI
+   */
+  private flushPendingMessages(cs: ChatState): void {
+    if (cs.pendingMessages.length === 0) return;
+
+    // 取出所有缓冲消息
+    const messages = cs.pendingMessages.splice(0);
+    // 合并文本（多条消息用换行分隔）
+    const combinedText = messages.map(m => m.text).join('\n');
+    // 使用最后一条消息的 frame（最新的 req_id）
+    const latestFrame = messages[messages.length - 1].frame;
+
+    logger.info(`[${cs.sessionId}] 合并 ${messages.length} 条缓冲消息发送`);
+
+    this.dispatchChat(cs, combinedText, latestFrame).catch((err) => {
+      logger.error(`处理缓冲消息失败:`, err);
+    });
+  }
+
+  /**
+   * 实际执行 chat 请求。
+   * 设置 busy=true，发送 thinking 占位，调用 backend.chat()。
+   * done 事件到来时会释放 busy 锁。
+   */
+  private async dispatchChat(cs: ChatState, text: string, frame: WsFrame, images?: ImageInput[]): Promise<void> {
+    cs.busy = true;
+    cs.stopped = false;
+    cs.frame = frame;
+
+    // 流式模式先发 thinking 占位
+    if (this.backend.isStreamEnabled()) {
+      const streamId = generateReqId('stream');
+      cs.stream = { streamId, buffer: '', dirty: false, throttleTimer: null };
+      try {
+        await this.wsClient.replyStream(frame, streamId, THINKING_PLACEHOLDER, false);
+      } catch (err) {
+        logger.error('发送思考中占位失败:', err);
+      }
+    }
+
+    try {
+      await this.backend.chat(cs.sessionId, text, images);
+    } catch (err) {
+      logger.error(`backend.chat 失败 (session=${cs.sessionId}):`, err);
+    }
   }
 
   private async handleIncomingMessage(frame: WsFrame): Promise<void> {
@@ -565,39 +721,38 @@ export class WXWorkPlatform extends PlatformAdapter {
     }
 
     const ck = this.chatKey(chatType, chatId, senderId);
-    const sessionId = this.getSessionId(ck);
 
-    logger.info(`[${sessionId}] from=${senderId}: text="${parsed.text.slice(0, 50)}" images=${parsed.imageUrls.length}`);
+    logger.info(`[${ck}] from=${senderId}: text="${parsed.text.slice(0, 50)}" images=${parsed.imageUrls.length}`);
 
-    // 指令处理（/new /clear /model /help）
+    // 指令处理（任何时候都能用，不受 busy 影响）
     if (parsed.text.startsWith('/')) {
       const handled = await this.handleCommand(parsed.text, frame, ck);
       if (handled) return;
     }
 
-    this.pendingFrames.set(sessionId, frame);
+    const cs = this.getChatState(ck);
 
-    // 流式模式先发 thinking 占位
-    if (this.backend.isStreamEnabled()) {
-      const streamId = generateReqId('stream');
-      this.streamStates.set(sessionId, { streamId, buffer: '', dirty: false, throttleTimer: null });
-      try {
-        await this.wsClient.replyStream(frame, streamId, THINKING_PLACEHOLDER, false);
-      } catch (err) {
-        logger.error('发送思考中占位失败:', err);
-      }
+    // 如果当前正忙，暂存消息到缓冲区
+    if (cs.busy) {
+      cs.pendingMessages.push({ text: parsed.text, frame });
+      const count = cs.pendingMessages.length;
+      // 通过主动推送告知用户消息已暂存
+      const noticeStreamId = generateReqId('stream');
+      this.wsClient.replyStream(frame, noticeStreamId,
+        `📥 消息已暂存（共 ${count} 条），等 AI 回复结束后自动发送。\n发送 \`/flush\` 可立即处理，\`/stop\` 可中止当前回复。`,
+        true,
+      ).catch(() => {});
+      logger.info(`[${cs.sessionId}] 消息已暂存 (共 ${count} 条)`);
+      return;
     }
 
+    // 下载图片（如有）
     let images: ImageInput[] | undefined;
     if (parsed.imageUrls.length > 0) {
       images = await this.downloadImages(parsed.imageUrls, parsed.imageAesKeys);
     }
 
-    try {
-      await this.backend.chat(sessionId, parsed.text, images);
-    } catch (err) {
-      logger.error(`backend.chat 失败 (session=${sessionId}):`, err);
-    }
+    await this.dispatchChat(cs, parsed.text, frame, images);
   }
 
   // ============ 图片下载 ============
