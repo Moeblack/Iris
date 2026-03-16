@@ -48,6 +48,7 @@ export function sanitizeSchemaForGemini(schema: unknown): unknown {
 
   const obj = schema as Record<string, unknown>;
   const result: Record<string, unknown> = {};
+  let hasStringifiedEnum = false;
 
   for (const [key, value] of Object.entries(obj)) {
     // 删除 Gemini 不支持的关键字
@@ -84,11 +85,18 @@ export function sanitizeSchemaForGemini(schema: unknown): unknown {
     // enum: 所有值转为字符串
     if (key === 'enum' && Array.isArray(value)) {
       result[key] = value.map(v => String(v));
+      hasStringifiedEnum = true;
       continue;
     }
 
     // 递归处理嵌套对象
     result[key] = sanitizeSchemaForGemini(value);
+  }
+
+  // enum 值已转为字符串，type 需要同步改为 string
+  // 放在循环结束后处理，避免被后续的 type 字段赋值覆盖
+  if (hasStringifiedEnum && (result.type === 'integer' || result.type === 'number')) {
+    result.type = 'string';
   }
 
   return result;
