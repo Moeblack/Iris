@@ -136,6 +136,7 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
   const renderer = useRenderer();
 
   const [pendingApprovals, setPendingApprovals] = useState<ToolInvocation[]>([]);
+  const [approvalChoice, setApprovalChoice] = useState<'approve' | 'reject'>('approve');
   const streamPartsRef = useRef<MessagePart[]>([]);
   const toolInvocationsRef = useRef<ToolInvocation[]>([]);
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -279,10 +280,21 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
       }
       return;
     }
-    // 工具审批拦截
+    // 工具审批拦截：左右/上下箭头切换选项，回车确认
     if (isGenerating && pendingApprovals.length > 0) {
-      if (key.name === 'y') { onToolApproval(pendingApprovals[0].id, true); return; }
-      if (key.name === 'n') { onToolApproval(pendingApprovals[0].id, false); return; }
+      if (key.name === 'left' || key.name === 'up' || key.name === 'right' || key.name === 'down') {
+        setApprovalChoice((prev) => prev === 'approve' ? 'reject' : 'approve');
+        return;
+      }
+      if (key.name === 'enter' || key.name === 'return') {
+        const approved = approvalChoice === 'approve';
+        onToolApproval(pendingApprovals[0].id, approved);
+        setApprovalChoice('approve'); // 重置为默认选择
+        return;
+      }
+      // y / n 快捷键保留兼容
+      if (key.name === 'y') { onToolApproval(pendingApprovals[0].id, true); setApprovalChoice('approve'); return; }
+      if (key.name === 'n') { onToolApproval(pendingApprovals[0].id, false); setApprovalChoice('approve'); return; }
       return;
     }
     if (viewMode === 'session-list') {
@@ -454,13 +466,19 @@ export function App({ onReady, onSubmit, onToolApproval, onAbort, onNewSession, 
 
       {/* 工具审批 / 输入栏 */}
       {pendingApprovals.length > 0 ? (
-        <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+        <box paddingLeft={1} paddingRight={1} flexShrink={0} flexDirection="column">
           <text>
             <span fg={C.warn}><strong>? </strong></span>
             <span fg={C.text}>确认执行 </span>
             <span fg={C.warn}><strong>{pendingApprovals[0].toolName}</strong></span>
-            <span fg={C.dim}>  (Y) 批准  (N) 拒绝</span>
             {pendingApprovals.length > 1 ? <span fg={C.dim}>{`  (剩余 ${pendingApprovals.length - 1} 个)`}</span> : null}
+          </text>
+          <text>
+            <span fg={C.dim}>{'  ←→ 切换  Enter 确认  '}</span>
+            {approvalChoice === 'approve'
+              ? <span><span fg={C.accent} bg="#1e3a2f"><strong> ✔ 批准(Y) </strong></span><span fg={C.dim}>   ✘ 拒绝(N) </span></span>
+              : <span><span fg={C.dim}>   ✔ 批准(Y) </span><span fg={C.error} bg="#3a1e1e"><strong> ✘ 拒绝(N) </strong></span></span>
+            }
           </text>
         </box>
       ) : (
