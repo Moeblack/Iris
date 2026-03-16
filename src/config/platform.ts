@@ -42,5 +42,9 @@ export function parsePlatformConfig(raw: any = {}): PlatformConfig {
       authToken: raw.web?.authToken,
       managementToken: raw.web?.managementToken,
     },
+    wxwork: {
+      botId: raw.wxwork?.botId ?? '',
+      secret: raw.wxwork?.secret ?? '',
+    },
   };
 }
