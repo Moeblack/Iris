@@ -37,7 +37,7 @@ export type LLMCaller = (request: LLMRequest, modelName?: string, signal?: Abort
 /** ToolLoop 配置（可变引用，支持热重载） */
 export interface ToolLoopConfig {
   maxRounds: number;
-  /** 按工具名称定义执行策略；未配置的工具视为不允许执行 */
+  /** 按工具名称定义执行策略；未配置的工具默认 autoApprove: false */
   toolPolicies: Record<string, ToolPolicyConfig>;
 }
 

@@ -230,8 +230,8 @@ async function executeSingle(
   // 检查工具策略
   const policy = toolPolicies[toolName];
   // 未配置的工具默认需要确认（autoApprove: false）
-  // 这样在有 toolState 的平台（Console）会弹出审批，
-  // 在无 toolState 的平台（WXWork）会直接执行。
+  // 在有 toolState 的平台（Console）会弹出审批，
+  // 不支持交互审批的平台（如 WXWork）应自行监听 tool:update 事件并自动批准。
   const effectivePolicy: ToolPolicyConfig = policy ?? { autoApprove: false };
 
   if (toolState && invocationId) {
