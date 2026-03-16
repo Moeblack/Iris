@@ -281,13 +281,27 @@ export class WXWorkPlatform extends PlatformAdapter {
   }
 
   private setupBackendListeners(): void {
-    // ---- 工具执行状态 → 流式更新 ----
+    // ---- 工具审批 + 状态展示 ----
+    // 企业微信不支持交互式审批（无法编辑/撤回消息），
+    // 因此遇到 awaiting_approval 状态的工具调用，自动批准执行。
     this.backend.on('tool:update', (sid: string, invocations: Array<{
+      id: string;
       toolName: string;
       status: string;
       args: Record<string, unknown>;
       createdAt: number;
     }>) => {
+      // 自动批准所有等待审批的工具
+      for (const inv of invocations) {
+        if (inv.status === 'awaiting_approval') {
+          try {
+            this.backend.approveTool(inv.id, true);
+          } catch {
+            // 状态可能已被并发转换，忽略
+          }
+        }
+      }
+
       if (!this.showToolStatus) return;
 
       const cs = this.findChatStateBySid(sid);
