@@ -10,8 +10,8 @@
     "lint:ui": "cd src/platforms/web/web-ui && npm run lint",
     "check:ui": "cd src/platforms/web/web-ui && npm run check",
     "dev:ui": "cd src/platforms/web/web-ui && npm run dev",
-    "start": "tsx src/index.ts",
-    "dev": "tsx src/index.ts",
+    "start": "bun src/index.ts",
+    "dev": "bun src/index.ts",
     "setup": "npm install --legacy-peer-deps && cd src/platforms/web/web-ui && npm install",
     "test": "vitest run"
   },
