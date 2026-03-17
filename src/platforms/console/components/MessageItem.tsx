@@ -37,6 +37,7 @@ export type MessagePart =
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
+  isError?: boolean;
   parts: MessagePart[];
   tokenIn?: number;
   tokenOut?: number;
@@ -98,7 +99,7 @@ export const MessageItem = React.memo(function MessageItem(
   const { width: termWidth } = useTerminalDimensions();
   const isUser = msg.role === 'user';
   const labelName = isUser ? 'you' : (msg.modelName || modelName || 'iris').toLowerCase();
-  const labelColor = isUser ? C.roleUser : C.roleAssistant;
+  const labelColor = isUser ? C.roleUser : (msg.isError ? C.error : C.roleAssistant);
   const headerText = `\u00b7 ${labelName} `;
 
   const displayParts: MessagePart[] = [...msg.parts];
@@ -127,6 +128,8 @@ export const MessageItem = React.memo(function MessageItem(
               <box key={group.index} marginTop={gi > 0 ? 1 : 0}>
                 {isUser ? (
                   <text fg={C.text}>{group.part.text}</text>
+                ) : msg.isError ? (
+                  <text fg={C.error}>{group.part.text}</text>
                 ) : (
                   <MarkdownText text={group.part.text} showCursor={isLastGroup && isStreaming} />
                 )}

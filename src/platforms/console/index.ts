@@ -181,7 +181,7 @@ export class ConsolePlatform extends PlatformAdapter {
 
     this.backend.on('error', (sid: string, error: string) => {
       if (sid === this.sessionId) {
-        this.appHandle?.addMessage('assistant', `!! CRITICAL_ERROR: ${error}`);
+        this.appHandle?.addErrorMessage(error);
       }
     });
 

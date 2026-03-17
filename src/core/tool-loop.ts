@@ -45,6 +45,8 @@ export interface ToolLoopConfig {
 export interface ToolLoopResult {
   /** 最终文本输出 */
   text: string;
+  /** 错误信息（LLM 调用失败等）—— 不应存入对话历史 */
+  error?: string;
   /** 完整对话历史（含本次所有新消息） */
   history: Content[];
   /** 是否因 abort 而中止 */
@@ -117,7 +119,8 @@ export class ToolLoop {
         const errorMsg = err instanceof Error ? err.message : String(err);
         logger.error(`LLM 调用失败 (round=${rounds}): ${errorMsg}`);
         return {
-          text: `LLM 调用出错: ${errorMsg}`,
+          text: '',
+          error: `LLM 调用出错: ${errorMsg}`,
           history,
         };
       }
@@ -155,7 +158,8 @@ export class ToolLoop {
 
     logger.warn(`工具轮次超过上限 (${this.config.maxRounds})`);
     return {
-      text: `工具执行轮次超过上限（${this.config.maxRounds}），已中断。`,
+      text: '',
+      error: `工具执行轮次超过上限（${this.config.maxRounds}），已中断。`,
       history,
     };
   }

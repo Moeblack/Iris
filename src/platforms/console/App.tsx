@@ -87,6 +87,7 @@ export interface MessageMeta {
 export interface AppHandle {
   addMessage(role: 'user' | 'assistant', content: string, meta?: MessageMeta): void;
   addStructuredMessage(role: 'user' | 'assistant', parts: MessagePart[], meta?: MessageMeta): void;
+  addErrorMessage(text: string): void;
   startStream(): void;
   pushStreamParts(parts: MessagePart[]): void;
   endStream(): void;
@@ -210,7 +211,12 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
         clearRedo(undoRedoRef.current);
         const textPart: MessagePart = { type: 'text', text: content };
         if (role === 'assistant') { setMessages((prev) => appendAssistantParts(prev, [textPart], meta)); return; }
-        setMessages((prev) => [...prev, { id: nextMsgId(), role, parts: [textPart], ...meta }]);
+        setMessages((prev) => [...prev.filter(m => !m.isError), { id: nextMsgId(), role, parts: [textPart], ...meta }]);
+      },
+      addErrorMessage(text) {
+        setMessages((prev) => [
+          ...prev, { id: nextMsgId(), role: 'assistant', parts: [{ type: 'text', text }], isError: true },
+        ]);
       },
       addStructuredMessage(role, parts, meta?) {
         clearRedo(undoRedoRef.current);

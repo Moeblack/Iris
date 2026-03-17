@@ -689,6 +689,15 @@ export class Backend extends EventEmitter {
       return;
     }
 
+    // 6.2. 如果工具循环返回了错误（LLM 调用失败、超过最大轮次等），
+    // 仅通过事件通知平台层显示，不存入对话历史、不发给 AI。
+    if (result.error) {
+      this.emit('error', sessionId, result.error);
+      this.emit('done', sessionId, Date.now() - startTime);
+      return;
+    }
+
+
     // 6.5. 工具循环若以“文本回退”结束（如 LLM 调用失败 / 超过最大轮次），
     // ToolLoop 不会追加最后一条 model 消息；这里补一条，统一平台事件与持久化行为。
     const hasFinalModelMessage = result.history[result.history.length - 1]?.role === 'model';
