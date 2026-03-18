@@ -17,16 +17,19 @@ describe('Lark Phase 5: Undo/Redo', () => {
     class FakeBackend extends EventEmitter {
       chats: any[] = [];
       async chat(sid: string, text: string) { this.chats.push({ sid, text }); }
-      async getHistory() {
-        return [
-          { role: 'user', parts: [{ text: '你好' }] },
-          { role: 'model', parts: [{ text: '你好！' }] },
-          { role: 'user', parts: [{ text: '撤销这句' }] },
-          { role: 'model', parts: [{ text: '好的' }] },
-        ];
-      }
-      async truncateHistory(sid: string, len: number) {
-        this.emit('truncated', sid, len);
+      undoCalls: Array<{ sessionId: string; scope: string }> = [];
+      async undo(sessionId: string, scope: string) {
+        this.undoCalls.push({ sessionId, scope });
+        return {
+          scope,
+          removed: [
+            { role: 'user', parts: [{ text: '撤销这句' }] },
+            { role: 'model', parts: [{ text: '好的' }] },
+          ],
+          userText: '撤销这句',
+          assistantText: '好的',
+          removedCount: 2,
+        };
       }
       isStreamEnabled() { return false; }
     }
@@ -68,14 +71,12 @@ describe('Lark Phase 5: Undo/Redo', () => {
     cs.lastBotMessageId = 'bot_msg_999';
     cs.busy = false;
 
-    let truncatedLen = -1;
-    backend.on('truncated', (_sid: string, len: number) => { truncatedLen = len; });
-
     // 执行 /undo
     await (platform as any).handleIncomingEvent(makePayload('/undo'));
 
-    expect(truncatedLen).toBe(2);
-    expect(cs.undoStack).toContain('撤销这句');
+    // 验证 undo 被调用（历史回滚由 Backend 统一处理）
+    expect(backend.undoCalls).toHaveLength(1);
+    expect(backend.undoCalls[0].scope).toBe('last-turn');
     expect(deletedIds).toContain('bot_msg_999');
     expect(cs.lastBotMessageId).toBeUndefined();
   });
@@ -85,11 +86,17 @@ describe('Lark Phase 5: Undo/Redo', () => {
 
     class FakeBackend extends EventEmitter {
       chats: any[] = [];
+      redoCalls: string[] = [];
       async chat(sid: string, text: string) { this.chats.push({ sid, text }); }
+      async redo(sessionId: string) {
+        this.redoCalls.push(sessionId);
+        return { restored: [{ role: 'model', parts: [{ text: '恢复后的回答' }] }], restoredCount: 1, userText: '被撤销的话', assistantText: '恢复后的回答' };
+      }
       isStreamEnabled() { return false; }
     }
 
     const backend = new FakeBackend();
+    const replies: string[] = [];
     const platform = new LarkPlatform(backend as any, {
       appId: 'cli_test',
       appSecret: 'secret_test',
@@ -97,7 +104,8 @@ describe('Lark Phase 5: Undo/Redo', () => {
 
     (platform as any).client = {
       sendText: vi.fn(async () => ({ messageId: 'mock', chatId: 'mock' })),
-      replyText: vi.fn(async () => ({ messageId: 'mock', chatId: 'mock' })),
+      replyText: vi.fn(async ({ text }: { text: string }) => { replies.push(text); return ({ messageId: 'mock', chatId: 'mock' }); }),
+      deleteMessage: vi.fn(),
     };
     (platform as any).messageHandler.setBotOpenId('ou_bot');
 
@@ -119,14 +127,11 @@ describe('Lark Phase 5: Undo/Redo', () => {
     await (platform as any).handleIncomingEvent(makePayload('测试消息'));
     const cs = (platform as any).getChatState({ chatKey: 'dm:ou_user1' } as any);
     cs.busy = false;
-    cs.undoStack = ['被撤销的话'];
 
     await (platform as any).handleIncomingEvent(makePayload('/redo'));
-    await new Promise((r) => setTimeout(r, 50));
 
-    expect(backend.chats).toHaveLength(2);
-    expect(backend.chats[1].text).toBe('被撤销的话');
-    expect(cs.undoStack).toHaveLength(0);
+    expect(backend.redoCalls).toHaveLength(1);
+    expect(replies).toContain('恢复后的回答');
   });
 });
 
@@ -137,16 +142,21 @@ describe('Telegram Phase 5: Undo/Redo', () => {
     const { TelegramPlatform } = await import('../src/platforms/telegram');
 
     class FakeBackend extends EventEmitter {
-      async getHistory() {
-        return [
-          { role: 'user', parts: [{ text: 'Hello' }] },
-          { role: 'model', parts: [{ text: 'Hi' }] },
-          { role: 'user', parts: [{ text: 'Undo me' }] },
-          { role: 'model', parts: [{ text: 'Sure' }] },
-        ];
-      }
-      async truncateHistory(sid: string, len: number) {
-        this.emit('truncated', sid, len);
+      chats: any[] = [];
+      undoCalls: Array<{ sessionId: string; scope: string }> = [];
+      async chat(sid: string, text: string) { this.chats.push({ sid, text }); }
+      async undo(sessionId: string, scope: string) {
+        this.undoCalls.push({ sessionId, scope });
+        return {
+          scope,
+          removed: [
+            { role: 'user', parts: [{ text: 'Undo me' }] },
+            { role: 'model', parts: [{ text: 'Sure' }] },
+          ],
+          userText: 'Undo me',
+          assistantText: 'Sure',
+          removedCount: 2,
+        };
       }
       isStreamEnabled() { return false; }
     }
@@ -177,13 +187,11 @@ describe('Telegram Phase 5: Undo/Redo', () => {
     cs.lastBotMessageId = 888;
     cs.busy = false;
 
-    let truncatedLen = -1;
-    backend.on('truncated', (_sid: string, len: number) => { truncatedLen = len; });
-
     await (platform as any).handleMessage(makeCtx('/undo'));
 
-    expect(truncatedLen).toBe(2);
-    expect(cs.undoStack).toContain('Undo me');
+    // 验证 undo 被调用（历史回滚由 Backend 统一处理）
+    expect(backend.undoCalls).toHaveLength(1);
+    expect(backend.undoCalls[0].scope).toBe('last-turn');
     expect(edited).toHaveLength(1);
     expect(edited[0].id).toBe(888);
     expect(edited[0].text).toContain('已撤销');
@@ -194,8 +202,12 @@ describe('Telegram Phase 5: Undo/Redo', () => {
     const { TelegramPlatform } = await import('../src/platforms/telegram');
 
     class FakeBackend extends EventEmitter {
-      chats: any[] = [];
-      async chat(sid: string, text: string) { this.chats.push({ sid, text }); }
+      redoCalls: string[] = [];
+      async chat() {}
+      async redo(sessionId: string) {
+        this.redoCalls.push(sessionId);
+        return { restored: [{ role: 'model', parts: [{ text: 'Redo answer' }] }], restoredCount: 1, userText: 'Undo me', assistantText: 'Redo answer' };
+      }
       isStreamEnabled() { return false; }
     }
 
@@ -219,13 +231,11 @@ describe('Telegram Phase 5: Undo/Redo', () => {
     await (platform as any).handleMessage(makeCtx('Test'));
     const cs = (platform as any).getChatState({ chatKey: 'dm:3002' } as any);
     cs.busy = false;
-    cs.undoStack = ['Undo me'];
 
     await (platform as any).handleMessage(makeCtx('/redo'));
-    await new Promise((r) => setTimeout(r, 50));
 
-    expect(backend.chats).toHaveLength(2);
-    expect(backend.chats[1].text).toBe('Undo me');
-    expect(cs.undoStack).toHaveLength(0);
+    expect(backend.redoCalls).toHaveLength(1);
+    expect((platform as any).client.sendMessageReturningId).toHaveBeenCalledTimes(1);
+    expect((platform as any).client.sendMessageReturningId).toHaveBeenLastCalledWith(expect.anything(), 'Redo answer');
   });
 });

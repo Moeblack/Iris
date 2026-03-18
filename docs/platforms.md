@@ -93,8 +93,9 @@ documents: Array<{ fileName: string; mimeType: string; data: string }>
 | sessionId | 启动时生成时间戳 ID，如 `20250715_143052_a7x2` |
 | 流式支持 | 支持 |
 | 工具状态 | 通过 `tool:update` 事件实时显示 |
-| 指令 | `/new`、`/load`、`/sh <命令>`、`/exit` 等 |
+| 指令 | `/new`、`/load`、`/sh <命令>`、`/undo`、`/redo`、`/exit` 等 |
 | 图片输入 | 当前未实现终端内图片上传 |
+| 撤销/重做 | 调用 Backend `undo('last-visible-message')` 与 `redo()` |
 
 ### WXWork（企业微信）
 
@@ -151,7 +152,8 @@ documents: Array<{ fileName: string; mimeType: string; data: string }>
 | 消息缓冲 | AI 输出期间用户新消息暂存到缓冲区，完成后自动合并发送 |
 | 工具审批 | 自动批准所有工具调用 |
 | 图片输入 | 支持图片/文件/语音消息解析并传入 Backend |
-| 消息去重 | 跳过重复 update，丢弃 30s 前的过期���息 |
+| 消息去重 | 跳过重复 update，丢弃 30s 前的过期消息 |
+| 撤销重做 | 接入 Backend undo('last-turn') 与 redo()，精准恢复，无孤立 functionCall 风险 |
 
 #### Telegram Slash 指令
 
@@ -182,6 +184,7 @@ documents: Array<{ fileName: string; mimeType: string; data: string }>
 | 工具审批 | 自动批准所有工具调用（飞书支持卡片按钮回调，Phase 4 可升级为交互审批） |
 | 图片输入 | 支持图片/文件/音频消息解析并传入 Backend |
 | 消息去重 | 跳过重复消息，丢弃 30s 前的过期消息 |
+| 撤销/重做 | 接入 Backend `undo('last-turn')` 与 `redo()`，精准恢复，无孤立 functionCall 风险 |
 
 #### 飞书 Slash 指令
 

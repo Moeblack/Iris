@@ -63,8 +63,7 @@ interface TelegramChatState {
   pendingMessages: TelegramPendingMessage[];
   stopped: boolean;
   lastInboundMessageId?: number;
-  lastBotMessageId?: number;  // Phase 5: 用于 undo 记录机器人最后一条消息的 ID
-  undoStack: string[];        // Phase 5: 用于 redo 存放撤销的用户输入文本
+  lastBotMessageId?: number;  // 用于 undo/redo 时处理平台侧最后一条机器人消息的 UI 状态
   /** 流式输出状态，非流式模式时为 null */
   stream: TelegramStreamState | null;
 }
@@ -135,7 +134,6 @@ export class TelegramPlatform extends PlatformAdapter {
         target,
         pendingMessages: [],
         stopped: false,
-        undoStack: [],
         stream: null,
       };
       this.chatStates.set(target.chatKey, cs);
@@ -333,6 +331,41 @@ export class TelegramPlatform extends PlatformAdapter {
     cs.lastBotMessageId = msgId; // 记录用于 undo
   }
 
+  /**
+   * undo 时处理 bot 消息的 UI 标记（编辑为"已撤销"或删除）。
+   * 从 undo 命令处理中提取出来，保持命令逻辑简洁。
+   */
+  private async markBotMessageAsUndone(cs: TelegramChatState): Promise<void> {
+    if (cs.lastBotMessageId) {
+      try {
+        await this.client.editText(cs.target, cs.lastBotMessageId, '~~已撤销~~');
+      } catch (e) {
+        logger.warn(`Telegram 消息编辑为已撤销失败 (${cs.lastBotMessageId})，尝试删除:`, e);
+        try {
+          await this.client.deleteMessage(cs.target, cs.lastBotMessageId);
+        } catch (err) {
+          logger.warn(`Telegram deleteMessage 也失败了:`, err);
+        }
+      }
+      cs.lastBotMessageId = undefined;
+    } else {
+      await this.sendToChat(cs, '✅ 上一轮对话已撤销。');
+    }
+  }
+
+  /**
+   * redo 后在 Telegram 侧补发可见 assistant 文本。
+   * Backend 恢复的是原始历史；平台层只负责把最终可见文本重新展示出来。
+   */
+  private async replayRedoResult(cs: TelegramChatState, assistantText: string): Promise<void> {
+    if (assistantText.trim()) {
+      await this.sendToChat(cs, assistantText);
+      return;
+    }
+    await this.sendToChat(cs, '✅ 上一轮对话已恢复。');
+  }
+
+
   // ---- 入站消息处理 ----
 
   private async handleMessage(ctx: any): Promise<void> {
@@ -507,37 +540,15 @@ export class TelegramPlatform extends PlatformAdapter {
           await reply('ℹ️ 当前正在回复中，请先 /stop。');
           return true;
         }
-        const history = await this.backend.getHistory(cs.sessionId);
-        if (history.length < 2) {
+        // undo 由 Backend 统一处理，平台层只负责 UI。
+        const undoResult = await this.backend.undo(cs.sessionId, 'last-turn');
+        if (!undoResult) {
           await reply('ℹ️ 没有可以撤销的对话。');
           return true;
         }
-        
-        // 保存被撤销的用户输入到 redo 栈
-        const lastUserMsg = history[history.length - 2];
-        if (lastUserMsg.role === 'user') {
-          const userText = lastUserMsg.parts.map(p => 'text' in p ? (p as { text?: string }).text ?? '' : '').join('');
-          cs.undoStack.push(userText);
-        }
 
-        await this.backend.truncateHistory(cs.sessionId, history.length - 2);
-        
-        if (cs.lastBotMessageId) {
-          try {
-            await this.client.editText(cs.target, cs.lastBotMessageId, '~~已撤销~~');
-          } catch (e) {
-            logger.warn(`Telegram 消息编辑为已撤销失败 (${cs.lastBotMessageId})，尝试删除:`, e);
-            // 如果不能 edit（比如超过时间或类型不支持），尝试 delete
-            try {
-              await this.client.deleteMessage(cs.target, cs.lastBotMessageId);
-            } catch (err) {
-              logger.warn(`Telegram deleteMessage 也失败了:`, err);
-            }
-          }
-          cs.lastBotMessageId = undefined;
-        } else {
-          await reply('✅ 上一轮对话已撤销。');
-        }
+        // 平台 UI 操作：标记/删除 bot 消息
+        await this.markBotMessageAsUndone(cs);
         return true;
       }
 
@@ -546,18 +557,14 @@ export class TelegramPlatform extends PlatformAdapter {
           await reply('ℹ️ 当前正在回复中，请先 /stop。');
           return true;
         }
-        if (cs.undoStack.length === 0) {
+        const redoResult = await this.backend.redo(cs.sessionId);
+        if (!redoResult) {
           await reply('ℹ️ 没有可以恢复的对话。');
           return true;
         }
-        const textToRedo = cs.undoStack.pop()!;
-        
-        void this.dispatchChat(cs, {
-          session: cs.target,
-          text: textToRedo,
-          messageId: cs.lastInboundMessageId ?? 0,
-          mentioned: false,
-        } as ParsedTelegramMessage);
+
+        // 平台 UI 只回放最终可见文本，不重新调 LLM。
+        await this.replayRedoResult(cs, redoResult.assistantText);
         return true;
       }
 
