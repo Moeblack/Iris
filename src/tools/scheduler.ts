@@ -270,7 +270,7 @@ async function executeSingle(
         };
       }
       // applied → 状态已被 applyTool 转为 executing
-    } else if (shouldAutoApprove(call, effectivePolicy)) {
+    } else if (globalSkipConfirmation || shouldAutoApprove(call, effectivePolicy)) {
       // 两类审批都跳过时才需要手动设置 executing
       toolState.transition(invocationId, 'executing');
     }
