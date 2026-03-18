@@ -15,6 +15,9 @@ stream: true
 # 默认模式（需与 modes.yaml 中定义的名称对应）
 # defaultMode: code
 
-# 记录 LLM 请求日志（调试用，默认关闭）
-# 开启后每次请求会在 ~/.iris/logs/ 生成一个 JSON 文件
+# 记录 LLM 请求/响应日志（调试用，默认关闭）
+# 开启后每次 LLM 调用会在 ~/.iris/logs/ 生成配对的请求和响应文件：
+#   request_<timestamp>.json   — 请求（URL、headers、body）
+#   response_<timestamp>.json  — 非流式响应原文
+#   response_<timestamp>.txt   — 流式响应原文（SSE）
 # logRequests: true
