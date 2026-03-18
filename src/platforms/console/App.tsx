@@ -614,12 +614,15 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
       {/* 底部输入区 */}
       <box flexDirection="column" flexShrink={0} paddingX={1} paddingBottom={1} paddingTop={hasMessages ? 1 : 0}>
         {pendingApprovals.length > 0 ? (
-          <box flexDirection="column" borderStyle="single" borderColor={C.warn} paddingLeft={1} paddingRight={1} paddingY={0}>
+          <box flexDirection="column" borderStyle="single" borderColor={approvalChoice === 'approve' ? C.accent : C.error} paddingLeft={1} paddingRight={1} paddingY={0}>
             <text>
               <span fg={C.warn}><strong>? </strong></span>
               <span fg={C.text}>确认执行 </span>
               <span fg={C.warn}><strong>{pendingApprovals[0].toolName}</strong></span>
-              <span fg={C.dim}>  (Y) 批准  (N) 拒绝</span>
+              <span fg={C.dim}>  </span>
+              <span fg={approvalChoice === 'approve' ? C.accent : C.textSec}>{approvalChoice === 'approve' ? '[(Y)批准]' : ' (Y)批准 '}</span>
+              <span fg={C.dim}> </span>
+              <span fg={approvalChoice === 'reject' ? C.error : C.textSec}>{approvalChoice === 'reject' ? '[(N)拒绝]' : ' (N)拒绝 '}</span>
               {pendingApprovals.length > 1 ? <span fg={C.dim}>{`  (剩余 ${pendingApprovals.length - 1} 个)`}</span> : null}
             </text>
           </box>
