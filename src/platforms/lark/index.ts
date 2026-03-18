@@ -72,8 +72,7 @@ interface LarkChatState {
   lastInboundMessageId?: string;
   stopped: boolean;
   pendingMessages: LarkPendingMessage[];
-  lastBotMessageId?: string; // Phase 5: 用于 undo 记录机器人最后一条消息的 ID
-  undoStack: string[];       // Phase 5: 用于 redo 存放撤销的用户输入文本
+  lastBotMessageId?: string; // 用于 undo/redo 时处理平台侧最后一条机器人消息的 UI 状态
   stream: LarkStreamState | null;
 }
 
@@ -161,7 +160,6 @@ export class LarkPlatform extends PlatformAdapter {
         target,
         pendingMessages: [],
         stopped: false,
-        undoStack: [],
         stream: null,
       };
       this.chatStates.set(target.chatKey, cs);
@@ -524,41 +522,16 @@ export class LarkPlatform extends PlatformAdapter {
           await reply('ℹ️ 当前正在回复中，请先 /stop。');
           return true;
         }
-        const history = await this.backend.getHistory(cs.sessionId);
-        if (history.length < 2) {
+        // undo 由 Backend 统一处理，平台层只负责 UI。
+        const undoResult = await this.backend.undo(cs.sessionId, 'last-turn');
+        if (!undoResult) {
           await reply('ℹ️ 没有可以撤销的对话。');
           return true;
         }
-        
-        // 保存被撤销的用户输入到 redo 栈
-        const lastUserMsg = history[history.length - 2];
-        if (lastUserMsg.role === 'user') {
-          const userText = lastUserMsg.parts.map(p => 'text' in p ? (p as { text?: string }).text ?? '' : '').join('');
-          cs.undoStack.push(userText);
-        }
 
-        await this.backend.truncateHistory(cs.sessionId, history.length - 2);
-        
-        // 尝试撤回或标记上一条 bot 消息
-        if (cs.lastBotMessageId) {
-          try {
-            await this.client.deleteMessage(cs.lastBotMessageId);
-          } catch (e) {
-            // 撤回失败可能因为超时(超过24h)，尝试更新内容为“已撤销”
-            logger.warn(`飞书消息撤回失败 (${cs.lastBotMessageId})，尝试用 patchCard 更新:`, e);
-            try {
-              await this.client.patchCard({
-                messageId: cs.lastBotMessageId,
-                card: buildLarkCard('complete', { text: '~~已撤销~~' })
-              });
-            } catch (err) {
-              logger.warn(`patchCard 也失败了:`, err);
-            }
-          }
-          cs.lastBotMessageId = undefined;
-        } else {
-          await reply('✅ 上一轮对话已撤销。');
-        }
+        // 平台 UI 操作：撤回/标记 bot 消息
+        await this.markBotMessageAsUndone(cs, reply);
+
         return true;
       }
 
@@ -567,23 +540,14 @@ export class LarkPlatform extends PlatformAdapter {
           await reply('ℹ️ 当前正在回复中，请先 /stop。');
           return true;
         }
-        if (cs.undoStack.length === 0) {
+        const redoResult = await this.backend.redo(cs.sessionId);
+        if (!redoResult) {
           await reply('ℹ️ 没有可以恢复的对话。');
           return true;
         }
-        const textToRedo = cs.undoStack.pop()!;
-        
-        // 重新发送被撤销的文本给 AI，模拟用户重新输入
-        void this.dispatchChat(cs, {
-          session: cs.target,
-          text: textToRedo,
-          messageId: cs.lastInboundMessageId ?? '',
-          chatId: cs.target.chatId,
-          senderOpenId: cs.target.userOpenId ?? '',
-          messageType: 'text',
-          mentioned: false,
-          resources: []
-        });
+
+        // 平台 UI 只回放最终可见文本，不重新调 LLM。
+        await this.replayRedoResult(cs, redoResult.assistantText);
         return true;
       }
 
@@ -596,6 +560,48 @@ export class LarkPlatform extends PlatformAdapter {
         return false;
     }
   }
+
+
+  /**
+   * undo 时处理 bot 消息的 UI 标记（撤回或更新为"已撤销"）。
+   * 从 undo 命令处理中提取出来，保持命令逻辑简洁。
+   */
+  private async markBotMessageAsUndone(
+    cs: LarkChatState,
+    reply: (text: string) => Promise<void>,
+  ): Promise<void> {
+    if (cs.lastBotMessageId) {
+      try {
+        await this.client.deleteMessage(cs.lastBotMessageId);
+      } catch (e) {
+        logger.warn(`飞书消息撤回失败 (${cs.lastBotMessageId})，尝试用 patchCard 更新:`, e);
+        try {
+          await this.client.patchCard({
+            messageId: cs.lastBotMessageId,
+            card: buildLarkCard('complete', { text: '~~已撤销~~' })
+          });
+        } catch (err) {
+          logger.warn(`patchCard 也失败了:`, err);
+        }
+      }
+      cs.lastBotMessageId = undefined;
+    } else {
+      await reply('✅ 上一轮对话已撤销。');
+    }
+  }
+
+  /**
+   * redo 后在飞书侧补发可见 assistant 文本。
+   * Backend 恢复的是原始历史；平台层只负责把最终可见文本重新展示出来。
+   */
+  private async replayRedoResult(cs: LarkChatState, assistantText: string): Promise<void> {
+    if (assistantText.trim()) {
+      await this.sendTextToChat(cs, assistantText);
+      return;
+    }
+    await this.sendTextToChat(cs, '✅ 上一轮对话已恢复。');
+  }
+
 
   // ---- 消息分发 ----
 
@@ -612,6 +618,8 @@ export class LarkPlatform extends PlatformAdapter {
     }
 
     // Phase 3：下载消息中的多媒体资源
+
+
     let images: ImageInput[] | undefined;
     let documents: DocumentInput[] | undefined;
     if (message.resources.length > 0) {
