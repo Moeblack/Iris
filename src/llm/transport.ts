@@ -5,7 +5,7 @@
  * 支持流式和非流式请求，通过 streamUrl 字段区分 URL。
  */
 
-import { logRequest } from '../logger/request-logger';
+import { logRequest, logResponse } from '../logger/request-logger';
 
 let loggingEnabled = false;
 
@@ -84,14 +84,55 @@ export async function sendRequest(
     ...endpoint.headers,
   };
 
+  let timestamp: string | undefined;
   if (loggingEnabled) {
-    logRequest({ url, method: 'POST', headers, body }).catch(() => {});
+    timestamp = logRequest({ url, method: 'POST', headers, body });
   }
 
-  return fetch(url, {
+  const res = await fetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
     signal: combineSignals(signal, effectiveTimeout),
+  });
+
+  if (!loggingEnabled || !timestamp) return res;
+
+  // 记录响应
+  if (stream) {
+    return wrapStreamForLogging(res, timestamp);
+  }
+  // 非流式：clone 后后台读取并记录
+  const clone = res.clone();
+  clone.text().then(text => logResponse(timestamp!, text, false)).catch(() => {});
+  return res;
+}
+
+/**
+ * 包装流式 Response，透传所有数据的同时收集完整响应用于日志记录。
+ *
+ * 使用 TransformStream 作为透明代理，流结束时将收集到的全部 SSE 文本写入文件。
+ */
+function wrapStreamForLogging(res: Response, timestamp: string): Response {
+  const body = res.body;
+  if (!body) return res;
+
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      chunks.push(decoder.decode(chunk, { stream: true }));
+      controller.enqueue(chunk);
+    },
+    flush() {
+      try { logResponse(timestamp, chunks.join(''), true); } catch { /* ignore */ }
+    },
+  });
+
+  return new Response(body.pipeThrough(transform), {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
   });
 }
