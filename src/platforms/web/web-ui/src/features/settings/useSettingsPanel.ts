@@ -138,6 +138,10 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     modelName: string
     modelId: string
     baseUrl: string
+    contextWindow: string
+    supportsVision: string // 'auto' | 'yes' | 'no'
+    headers: string
+    requestBody: string
     modelCatalog: ModelCatalogState
     modelCatalogRequestVersion: number
     lastProvider: string
@@ -146,11 +150,11 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
   let nextModelEntryUid = 1
 
   /** Provider 默认值，与 src/config/llm.ts DEFAULTS 保持一致 */
-  const PROVIDER_DEFAULTS: Record<string, { model: string; baseUrl: string }> = {
-    gemini: { model: 'gemini-2.0-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' },
-    'openai-compatible': { model: 'gpt-4o', baseUrl: 'https://api.openai.com/v1' },
-    'openai-responses': { model: 'gpt-4o', baseUrl: 'https://api.openai.com/v1' },
-    claude: { model: 'claude-sonnet-4-6', baseUrl: 'https://api.anthropic.com/v1' },
+  const PROVIDER_DEFAULTS: Record<string, { model: string; baseUrl: string; contextWindow: number }> = {
+    gemini: { model: 'gemini-2.0-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', contextWindow: 1048576 },
+    'openai-compatible': { model: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', contextWindow: 128000 },
+    'openai-responses': { model: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', contextWindow: 128000 },
+    claude: { model: 'claude-sonnet-4-6', baseUrl: 'https://api.anthropic.com/v1', contextWindow: 200000 },
   }
 
   function createModelCatalogState(): ModelCatalogState {
@@ -164,7 +168,7 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
   }
 
   function createModelEntry(provider = 'gemini', data: Partial<ModelEntry> = {}): ModelEntry {
-    const defaults = PROVIDER_DEFAULTS[provider] ?? { model: '', baseUrl: '' }
+    const defaults = PROVIDER_DEFAULTS[provider] ?? { model: '', baseUrl: '', contextWindow: 0 }
     return {
       uid: nextModelEntryUid++,
       open: data.open ?? true,
@@ -174,10 +178,19 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       modelName: data.modelName ?? '',
       modelId: data.modelId ?? defaults.model,
       baseUrl: data.baseUrl ?? defaults.baseUrl,
+      contextWindow: data.contextWindow ?? '',
+      supportsVision: data.supportsVision ?? 'auto',
+      headers: data.headers ?? '',
+      requestBody: data.requestBody ?? '',
       modelCatalog: createModelCatalogState(),
       modelCatalogRequestVersion: 0,
       lastProvider: provider,
     }
+  }
+
+  /** 通用 number input 字符串同步：保持 reactive 字段始终为 string，避免 v-model type="number" 转为 number */
+  function handleStringNumberInput(target: Record<string, any>, key: string, event: Event) {
+    target[key] = (event.target as HTMLInputElement).value
   }
 
   function clampInteger(value: number, min: number, max: number): number {
@@ -215,6 +228,11 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       claude: 'Claude',
     }
     return map[provider] || provider
+  }
+
+  function contextWindowPlaceholder(entry: ModelEntry): string {
+    const defaults = PROVIDER_DEFAULTS[entry.provider]
+    return defaults?.contextWindow ? String(defaults.contextWindow) : ''
   }
 
   const defaultModelOptions = computed(() => {
@@ -276,8 +294,8 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
   }
 
   function handleModelProviderChange(entry: ModelEntry) {
-    const oldDefaults = PROVIDER_DEFAULTS[entry.lastProvider] ?? { model: '', baseUrl: '' }
-    const newDefaults = PROVIDER_DEFAULTS[entry.provider] ?? { model: '', baseUrl: '' }
+    const oldDefaults = PROVIDER_DEFAULTS[entry.lastProvider] ?? { model: '', baseUrl: '', contextWindow: 0 }
+    const newDefaults = PROVIDER_DEFAULTS[entry.provider] ?? { model: '', baseUrl: '', contextWindow: 0 }
     if (!entry.modelId || entry.modelId === oldDefaults.model) entry.modelId = newDefaults.model
     if (!entry.baseUrl || entry.baseUrl === oldDefaults.baseUrl) entry.baseUrl = newDefaults.baseUrl
     if (entry.apiKey.startsWith('****')) entry.apiKey = ''
@@ -643,6 +661,144 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     return null
   }
 
+  // ============ Computer Use ============
+  const computerUse = reactive({
+    enabled: false,
+    environment: 'browser' as string,
+    screenWidth: '',
+    screenHeight: '',
+    postActionDelay: '',
+    screenshotFormat: 'png' as string,
+    screenshotQuality: '',
+    headless: false,
+    initialUrl: '',
+    searchEngineUrl: '',
+    highlightMouse: false,
+    targetWindow: '',
+    backgroundMode: false,
+    maxRecentScreenshots: '',
+    envToolBrowserMode: 'all' as string,
+    envToolBrowserList: '',
+    envToolScreenMode: 'all' as string,
+    envToolScreenList: '',
+    envToolBackgroundMode: 'all' as string,
+    envToolBackgroundList: '',
+  })
+
+  function buildComputerUsePayload(): Record<string, any> {
+    const cu: Record<string, any> = {
+      enabled: computerUse.enabled,
+      environment: computerUse.environment,
+    }
+    const numOrNull = (val: string | number): number | null => {
+      const trimmed = String(val).trim()
+      if (!trimmed) return null
+      const n = Number(trimmed)
+      return Number.isFinite(n) ? n : null
+    }
+    cu.screenWidth = numOrNull(computerUse.screenWidth)
+    cu.screenHeight = numOrNull(computerUse.screenHeight)
+    cu.postActionDelay = numOrNull(computerUse.postActionDelay)
+    cu.screenshotFormat = computerUse.screenshotFormat
+    cu.screenshotQuality = numOrNull(computerUse.screenshotQuality)
+    cu.headless = computerUse.headless
+    cu.initialUrl = computerUse.initialUrl.trim() || null
+    cu.searchEngineUrl = computerUse.searchEngineUrl.trim() || null
+    cu.highlightMouse = computerUse.highlightMouse
+    cu.targetWindow = computerUse.targetWindow.trim() || null
+    cu.backgroundMode = computerUse.backgroundMode
+    cu.maxRecentScreenshots = numOrNull(computerUse.maxRecentScreenshots)
+    const buildToolPolicy = (mode: string, list: string): any => {
+      if (mode === 'include') return { include: list.split('\n').map(s => s.trim()).filter(Boolean), exclude: null }
+      if (mode === 'exclude') return { exclude: list.split('\n').map(s => s.trim()).filter(Boolean), include: null }
+      return null
+    }
+    const browser = buildToolPolicy(computerUse.envToolBrowserMode, computerUse.envToolBrowserList)
+    const screen = buildToolPolicy(computerUse.envToolScreenMode, computerUse.envToolScreenList)
+    const background = buildToolPolicy(computerUse.envToolBackgroundMode, computerUse.envToolBackgroundList)
+    if (browser || screen || background) {
+      cu.environmentTools = { browser, screen, background }
+    } else {
+      cu.environmentTools = null
+    }
+    return cu
+  }
+
+  // ============ Platform Config ============
+  const platformConfig = reactive({
+    types: [] as string[],
+    web: { port: '', host: '', authToken: '', managementToken: '' },
+    discord: { token: '' },
+    telegram: { token: '', showToolStatus: false, groupMentionRequired: false },
+    wxwork: { botId: '', secret: '', showToolStatus: false },
+    lark: { appId: '', appSecret: '', verificationToken: '', encryptKey: '', showToolStatus: false },
+    qq: { wsUrl: '', accessToken: '', selfId: '', groupMode: 'at' as string, showToolStatus: false },
+  })
+
+  function buildPlatformPayload(): Record<string, any> {
+    const p: Record<string, any> = {}
+    p.types = platformConfig.types.length > 0 ? [...platformConfig.types] : null
+    // Web
+    const web: Record<string, any> = {}
+    const webPort = String(platformConfig.web.port).trim()
+    web.port = webPort ? (Number(webPort) || null) : null
+    web.host = platformConfig.web.host.trim() || null
+    if (platformConfig.web.authToken && !platformConfig.web.authToken.startsWith('****')) {
+      web.authToken = platformConfig.web.authToken
+    }
+    if (platformConfig.web.managementToken && !platformConfig.web.managementToken.startsWith('****')) {
+      web.managementToken = platformConfig.web.managementToken
+    }
+    p.web = web
+    // Discord
+    const discord: Record<string, any> = {}
+    if (platformConfig.discord.token && !platformConfig.discord.token.startsWith('****')) {
+      discord.token = platformConfig.discord.token
+    }
+    p.discord = discord
+    // Telegram
+    const telegram: Record<string, any> = {
+      showToolStatus: platformConfig.telegram.showToolStatus,
+      groupMentionRequired: platformConfig.telegram.groupMentionRequired,
+    }
+    if (platformConfig.telegram.token && !platformConfig.telegram.token.startsWith('****')) {
+      telegram.token = platformConfig.telegram.token
+    }
+    p.telegram = telegram
+    // 企业微信
+    const wxwork: Record<string, any> = {
+      botId: platformConfig.wxwork.botId.trim() || null,
+      showToolStatus: platformConfig.wxwork.showToolStatus,
+    }
+    if (platformConfig.wxwork.secret && !platformConfig.wxwork.secret.startsWith('****')) {
+      wxwork.secret = platformConfig.wxwork.secret
+    }
+    p.wxwork = wxwork
+    // 飞书
+    const lark: Record<string, any> = {
+      appId: platformConfig.lark.appId.trim() || null,
+      verificationToken: platformConfig.lark.verificationToken.trim() || null,
+      encryptKey: platformConfig.lark.encryptKey.trim() || null,
+      showToolStatus: platformConfig.lark.showToolStatus,
+    }
+    if (platformConfig.lark.appSecret && !platformConfig.lark.appSecret.startsWith('****')) {
+      lark.appSecret = platformConfig.lark.appSecret
+    }
+    p.lark = lark
+    // QQ
+    const qq: Record<string, any> = {
+      wsUrl: platformConfig.qq.wsUrl.trim() || null,
+      selfId: platformConfig.qq.selfId.trim() || null,
+      groupMode: platformConfig.qq.groupMode || null,
+      showToolStatus: platformConfig.qq.showToolStatus,
+    }
+    if (platformConfig.qq.accessToken && !platformConfig.qq.accessToken.startsWith('****')) {
+      qq.accessToken = platformConfig.qq.accessToken
+    }
+    p.qq = qq
+    return p
+  }
+
   const mcpServers = reactive<MCPServerEntry[]>([])
   /** 加载时记录的原始服务器名，用于保存时识别被删除的服务器 */
   const mcpOriginalNames = ref<string[]>([])
@@ -877,11 +1033,13 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       () => config.maxToolRounds,
       () => config.stream,
       () => defaultModelName.value,
-      () => JSON.stringify(modelEntries.map(entry => ({ modelName: entry.modelName, provider: entry.provider, apiKey: entry.apiKey, modelId: entry.modelId, baseUrl: entry.baseUrl }))),
+      () => JSON.stringify(modelEntries.map(entry => ({ modelName: entry.modelName, provider: entry.provider, apiKey: entry.apiKey, modelId: entry.modelId, baseUrl: entry.baseUrl, contextWindow: entry.contextWindow, supportsVision: entry.supportsVision, headers: entry.headers, requestBody: entry.requestBody }))),
       // 排除 open（纯 UI 状态）
       () => JSON.stringify(mcpServers, (key, value) => (key === 'open' || key === 'timeoutInput') ? undefined : value),
       () => JSON.stringify(subAgentEntries.map(e => ({ name: e.name, description: e.description, systemPrompt: e.systemPrompt, toolMode: e.toolMode, toolList: e.toolList, modelName: e.modelName, maxToolRounds: e.maxToolRounds, parallel: e.parallel }))),
       () => JSON.stringify(modeEntries.map(e => ({ name: e.name, description: e.description, systemPrompt: e.systemPrompt, toolMode: e.toolMode, toolList: e.toolList }))),
+      () => JSON.stringify(computerUse),
+      () => JSON.stringify(platformConfig),
     ],
     scheduleAutoSave,
   )
@@ -900,6 +1058,10 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
           apiKey: cfg.apiKey || '',
           modelId: cfg.model || '',
           baseUrl: cfg.baseUrl || '',
+          contextWindow: cfg.contextWindow != null ? String(cfg.contextWindow) : '',
+          supportsVision: cfg.supportsVision === true ? 'yes' : cfg.supportsVision === false ? 'no' : 'auto',
+          headers: cfg.headers && typeof cfg.headers === 'object' ? JSON.stringify(cfg.headers, null, 2) : '',
+          requestBody: cfg.requestBody && typeof cfg.requestBody === 'object' ? JSON.stringify(cfg.requestBody, null, 2) : '',
           open: name === llm.defaultModel,
         }))
         modelOriginalNames.value.push(name)
@@ -999,6 +1161,79 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
         modeOriginalNames.value = modeEntries.map(e => e.name)
       }
 
+      // Computer Use
+      if (data.computer_use && typeof data.computer_use === 'object') {
+        const cu = data.computer_use
+        computerUse.enabled = !!cu.enabled
+        computerUse.environment = cu.environment === 'screen' ? 'screen' : 'browser'
+        computerUse.screenWidth = cu.screenWidth != null ? String(cu.screenWidth) : ''
+        computerUse.screenHeight = cu.screenHeight != null ? String(cu.screenHeight) : ''
+        computerUse.postActionDelay = cu.postActionDelay != null ? String(cu.postActionDelay) : ''
+        computerUse.screenshotFormat = cu.screenshotFormat === 'jpeg' ? 'jpeg' : 'png'
+        computerUse.screenshotQuality = cu.screenshotQuality != null ? String(cu.screenshotQuality) : ''
+        computerUse.headless = !!cu.headless
+        computerUse.initialUrl = cu.initialUrl || ''
+        computerUse.searchEngineUrl = cu.searchEngineUrl || ''
+        computerUse.highlightMouse = !!cu.highlightMouse
+        computerUse.targetWindow = cu.targetWindow || ''
+        computerUse.backgroundMode = !!cu.backgroundMode
+        computerUse.maxRecentScreenshots = cu.maxRecentScreenshots != null ? String(cu.maxRecentScreenshots) : ''
+        if (cu.environmentTools && typeof cu.environmentTools === 'object') {
+          const loadPolicy = (policy: any): { mode: string; list: string } => {
+            if (!policy || typeof policy !== 'object') return { mode: 'all', list: '' }
+            if (Array.isArray(policy.include) && policy.include.length > 0) return { mode: 'include', list: policy.include.join('\n') }
+            if (Array.isArray(policy.exclude) && policy.exclude.length > 0) return { mode: 'exclude', list: policy.exclude.join('\n') }
+            return { mode: 'all', list: '' }
+          }
+          const bp = loadPolicy(cu.environmentTools.browser)
+          computerUse.envToolBrowserMode = bp.mode
+          computerUse.envToolBrowserList = bp.list
+          const sp = loadPolicy(cu.environmentTools.screen)
+          computerUse.envToolScreenMode = sp.mode
+          computerUse.envToolScreenList = sp.list
+          const bgp = loadPolicy(cu.environmentTools.background)
+          computerUse.envToolBackgroundMode = bgp.mode
+          computerUse.envToolBackgroundList = bgp.list
+        }
+      }
+
+      // Platform
+      if (data.platform && typeof data.platform === 'object') {
+        const pl = data.platform
+        if (Array.isArray(pl.types)) platformConfig.types = [...pl.types]
+        if (pl.web) {
+          platformConfig.web.port = pl.web.port != null ? String(pl.web.port) : ''
+          platformConfig.web.host = pl.web.host || ''
+          platformConfig.web.authToken = pl.web.authToken || ''
+          platformConfig.web.managementToken = pl.web.managementToken || ''
+        }
+        if (pl.discord) platformConfig.discord.token = pl.discord.token || ''
+        if (pl.telegram) {
+          platformConfig.telegram.token = pl.telegram.token || ''
+          platformConfig.telegram.showToolStatus = !!pl.telegram.showToolStatus
+          platformConfig.telegram.groupMentionRequired = !!pl.telegram.groupMentionRequired
+        }
+        if (pl.wxwork) {
+          platformConfig.wxwork.botId = pl.wxwork.botId || ''
+          platformConfig.wxwork.secret = pl.wxwork.secret || ''
+          platformConfig.wxwork.showToolStatus = !!pl.wxwork.showToolStatus
+        }
+        if (pl.lark) {
+          platformConfig.lark.appId = pl.lark.appId || ''
+          platformConfig.lark.appSecret = pl.lark.appSecret || ''
+          platformConfig.lark.verificationToken = pl.lark.verificationToken || ''
+          platformConfig.lark.encryptKey = pl.lark.encryptKey || ''
+          platformConfig.lark.showToolStatus = !!pl.lark.showToolStatus
+        }
+        if (pl.qq) {
+          platformConfig.qq.wsUrl = pl.qq.wsUrl || ''
+          platformConfig.qq.accessToken = pl.qq.accessToken || ''
+          platformConfig.qq.selfId = pl.qq.selfId || ''
+          platformConfig.qq.groupMode = pl.qq.groupMode || 'at'
+          platformConfig.qq.showToolStatus = !!pl.qq.showToolStatus
+        }
+      }
+
       // 等待 provider watcher 的异步回调执行完毕后再启用副作用
       await nextTick()
       configLoaded = true
@@ -1033,6 +1268,30 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     if (entry.apiKey && !entry.apiKey.startsWith('****')) {
       payload.apiKey = entry.apiKey
     }
+    // contextWindow
+    const cw = String(entry.contextWindow).trim()
+    if (cw) {
+      const parsed = Number(cw)
+      if (Number.isFinite(parsed) && parsed > 0) payload.contextWindow = parsed
+    } else {
+      payload.contextWindow = null
+    }
+    // supportsVision
+    if (entry.supportsVision === 'yes') payload.supportsVision = true
+    else if (entry.supportsVision === 'no') payload.supportsVision = false
+    else payload.supportsVision = null
+    // headers
+    if (entry.headers.trim()) {
+      payload.headers = JSON.parse(entry.headers.trim())
+    } else {
+      payload.headers = null
+    }
+    // requestBody
+    if (entry.requestBody.trim()) {
+      payload.requestBody = JSON.parse(entry.requestBody.trim())
+    } else {
+      payload.requestBody = null
+    }
     return payload
   }
 
@@ -1045,6 +1304,12 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       if (!modelName) return '模型名称不能为空'
       if (names.has(modelName)) return `模型名称重复：${modelName}`
       if (!entry.modelId.trim()) return `模型「${modelName}」缺少模型 ID`
+      if (entry.headers.trim()) {
+        try { JSON.parse(entry.headers.trim()) } catch { return `模型「${modelName}」的自定义请求头不是合法 JSON` }
+      }
+      if (entry.requestBody.trim()) {
+        try { JSON.parse(entry.requestBody.trim()) } catch { return `模型「${modelName}」的自定义请求体不是合法 JSON` }
+      }
       names.add(modelName)
     }
 
@@ -1170,6 +1435,8 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       if (modesPayload !== null) {
         payload.modes = modesPayload
       }
+      payload.computer_use = buildComputerUsePayload()
+      payload.platform = buildPlatformPayload()
       const result = await updateConfig(payload)
 
       if (result.ok) {
@@ -1534,6 +1801,10 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     modeEntries,
     addModeEntry,
     removeModeEntry,
+    computerUse,
+    platformConfig,
+    contextWindowPlaceholder,
+    handleStringNumberInput,
     cf,
     streamHint,
     resetOverlayCloseIntent,

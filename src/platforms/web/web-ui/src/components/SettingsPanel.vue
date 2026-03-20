@@ -112,6 +112,26 @@
                   <label>API 地址</label>
                   <input type="text" v-model="entry.baseUrl" placeholder="模型服务请求地址" />
                 </div>
+                <div class="form-group">
+                  <label>上下文窗口</label>
+                  <input type="number" :value="entry.contextWindow" :placeholder="contextWindowPlaceholder(entry) || '留空使用提供商默认值'" min="1" @input="handleStringNumberInput(entry, 'contextWindow', $event)" />
+                  <p class="field-hint">模型上下文窗口大小（token 数）。留空自动使用提供商默认值。</p>
+                </div>
+                <div class="form-group">
+                  <label>视觉能力</label>
+                  <AppSelect v-model="entry.supportsVision" :options="visionOptions" />
+                  <p class="field-hint">声明模型是否支持图片输入。「自动」时由提供商判断。</p>
+                </div>
+                <div class="form-group full-width">
+                  <label>自定义请求头</label>
+                  <textarea v-model="entry.headers" rows="2" placeholder='{"X-Custom": "value"}'></textarea>
+                  <p class="field-hint">JSON 格式，会覆盖提供商内置同名 header。</p>
+                </div>
+                <div class="form-group full-width">
+                  <label>自定义请求体</label>
+                  <textarea v-model="entry.requestBody" rows="2" placeholder='{"temperature": 0.7}'></textarea>
+                  <p class="field-hint">JSON 格式，会深合并到最终请求体，支持嵌套参数。</p>
+                </div>
               </div>
             </div>
           </div>
@@ -400,6 +420,368 @@
           <button class="btn-mcp-add" type="button" @click="addModeEntry">+ 新增模式</button>
         </section>
 
+        <!-- Computer Use -->
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <div>
+              <h3>Computer Use</h3>
+              <p>启用浏览器或桌面自动化能力，让 AI 可以操作屏幕完成复杂任务。</p>
+              <p class="field-hint" style="margin-top:4px;color:var(--warning, orange)">修改后需要重启才能生效。</p>
+            </div>
+            <span class="settings-pill">{{ computerUse.enabled ? '已启用' : '已关闭' }}</span>
+          </div>
+
+          <div class="settings-switch-row">
+            <div>
+              <span class="switch-label">启用 Computer Use</span>
+              <p class="field-hint">开启后 AI 将能使用浏览器或桌面截图与操作工具。</p>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" v-model="computerUse.enabled" />
+              <span class="toggle-switch-ui"></span>
+            </label>
+          </div>
+
+          <template v-if="computerUse.enabled">
+            <div class="settings-grid two-columns" style="margin-top:12px">
+              <div class="form-group">
+                <label>执行环境</label>
+                <AppSelect v-model="computerUse.environment" :options="cuEnvironmentOptions" />
+                <p class="field-hint">browser 使用 Playwright 浏览器；screen 使用系统桌面截图与鼠标键盘。</p>
+              </div>
+              <div class="form-group">
+                <label>截图格式</label>
+                <AppSelect v-model="computerUse.screenshotFormat" :options="cuScreenshotFormatOptions" />
+              </div>
+              <div class="form-group">
+                <label>视口宽度</label>
+                <input type="number" :value="computerUse.screenWidth" placeholder="1440" min="100" @input="handleStringNumberInput(computerUse, 'screenWidth', $event)" />
+              </div>
+              <div class="form-group">
+                <label>视口高度</label>
+                <input type="number" :value="computerUse.screenHeight" placeholder="900" min="100" @input="handleStringNumberInput(computerUse, 'screenHeight', $event)" />
+              </div>
+              <div class="form-group">
+                <label>截图质量</label>
+                <input type="number" :value="computerUse.screenshotQuality" placeholder="仅 JPEG 格式有效 (1-100)" min="1" max="100" @input="handleStringNumberInput(computerUse, 'screenshotQuality', $event)" />
+              </div>
+              <div class="form-group">
+                <label>保留截图轮次</label>
+                <input type="number" :value="computerUse.maxRecentScreenshots" placeholder="3" min="1" @input="handleStringNumberInput(computerUse, 'maxRecentScreenshots', $event)" />
+              </div>
+              <div class="form-group">
+                <label>操作后延迟（ms）</label>
+                <input type="number" :value="computerUse.postActionDelay" placeholder="无延迟" min="0" @input="handleStringNumberInput(computerUse, 'postActionDelay', $event)" />
+              </div>
+            </div>
+
+            <!-- browser 环境特有字段 -->
+            <template v-if="computerUse.environment === 'browser'">
+              <label class="settings-sub-label" style="margin-top:16px">浏览器环境设置</label>
+              <div class="settings-grid two-columns">
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">无头模式</span>
+                    <p class="field-hint">不弹出浏览器窗口，在后台运行。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="computerUse.headless" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">高亮鼠标指针</span>
+                    <p class="field-hint">在截图中标记鼠标位置。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="computerUse.highlightMouse" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+                <div class="form-group full-width">
+                  <label>初始 URL</label>
+                  <input type="text" v-model="computerUse.initialUrl" placeholder="https://example.com" />
+                  <p class="field-hint">浏览器启动时打开的页面。</p>
+                </div>
+                <div class="form-group full-width">
+                  <label>搜索引擎 URL</label>
+                  <input type="text" v-model="computerUse.searchEngineUrl" placeholder="https://www.google.com/search?q=" />
+                </div>
+              </div>
+            </template>
+
+            <!-- screen 环境特有字段 -->
+            <template v-if="computerUse.environment === 'screen'">
+              <label class="settings-sub-label" style="margin-top:16px">桌面环境设置</label>
+              <div class="settings-grid two-columns">
+                <div class="form-group full-width">
+                  <label>目标窗口标题</label>
+                  <input type="text" v-model="computerUse.targetWindow" placeholder="子字符串匹配（可选）" />
+                  <p class="field-hint">指定后仅截取包含该标题的窗口。</p>
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">后台模式</span>
+                    <p class="field-hint">不将窗口置于前台。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="computerUse.backgroundMode" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+              </div>
+            </template>
+
+            <!-- 环境工具策略 -->
+            <div class="tier-block" style="margin-top:16px">
+              <div class="tier-header" @click="cuToolPolicyOpen = !cuToolPolicyOpen">
+                <span class="tier-arrow" :class="{ open: cuToolPolicyOpen }">▶</span>
+                <span class="tier-label">环境工具策略</span>
+                <span class="tier-desc">控制不同环境下可用的工具</span>
+              </div>
+              <div v-show="cuToolPolicyOpen" class="tier-body">
+                <div v-for="envKey in cuEnvToolKeys" :key="envKey.key" style="margin-bottom:16px">
+                  <label class="settings-sub-label">{{ envKey.label }}</label>
+                  <div class="settings-grid two-columns">
+                    <div class="form-group">
+                      <label>工具策略</label>
+                      <AppSelect v-model="computerUse[envKey.modeKey]" :options="cuToolModeOptions" />
+                    </div>
+                    <div class="form-group full-width" v-if="computerUse[envKey.modeKey] !== 'all'">
+                      <label>{{ computerUse[envKey.modeKey] === 'include' ? '工具白名单' : '工具黑名单' }}（每行一个）</label>
+                      <textarea v-model="computerUse[envKey.listKey]" rows="3" placeholder="computer_screenshot&#10;computer_click&#10;..."></textarea>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </section>
+
+        <!-- 平台配置 -->
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <div>
+              <h3>平台配置</h3>
+              <p>配置 Iris 运行在哪些平台上，以及各平台的连接凭证。</p>
+              <p class="field-hint" style="margin-top:4px;color:var(--warning, orange)">修改后需要重启才能生效。</p>
+            </div>
+            <span class="settings-pill">{{ platformConfig.types.length }} 个平台</span>
+          </div>
+
+          <div class="form-group" style="margin-bottom:16px">
+            <label>启动平台</label>
+            <div class="platform-checkbox-group">
+              <label v-for="pt in platformTypeOptions" :key="pt.value" class="platform-checkbox">
+                <input type="checkbox" :value="pt.value" v-model="platformConfig.types" />
+                {{ pt.label }}
+              </label>
+            </div>
+            <p class="field-hint">勾选后对应平台会在启动时激活。</p>
+          </div>
+
+          <!-- Web -->
+          <div class="tier-block">
+            <div class="tier-header" @click="platformOpen.web = !platformOpen.web">
+              <span class="tier-arrow" :class="{ open: platformOpen.web }">▶</span>
+              <span class="tier-label">Web</span>
+              <span class="tier-desc">Web GUI 端口、鉴权</span>
+            </div>
+            <div v-show="platformOpen.web" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group">
+                  <label>端口</label>
+                  <input type="number" :value="platformConfig.web.port" placeholder="3000" min="1" max="65535" @input="handleStringNumberInput(platformConfig.web, 'port', $event)" />
+                </div>
+                <div class="form-group">
+                  <label>主机</label>
+                  <input type="text" v-model="platformConfig.web.host" placeholder="0.0.0.0" />
+                </div>
+                <div class="form-group full-width">
+                  <label>API 访问令牌</label>
+                  <input type="password" v-model="platformConfig.web.authToken" placeholder="可选" />
+                  <p v-if="platformConfig.web.authToken.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+                <div class="form-group full-width">
+                  <label>管理令牌</label>
+                  <input type="password" v-model="platformConfig.web.managementToken" placeholder="可选" />
+                  <p v-if="platformConfig.web.managementToken.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Discord -->
+          <div class="tier-block">
+            <div class="tier-header" @click="platformOpen.discord = !platformOpen.discord">
+              <span class="tier-arrow" :class="{ open: platformOpen.discord }">▶</span>
+              <span class="tier-label">Discord</span>
+              <span class="tier-desc">Discord Bot</span>
+            </div>
+            <div v-show="platformOpen.discord" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group full-width">
+                  <label>Bot Token</label>
+                  <input type="password" v-model="platformConfig.discord.token" placeholder="Discord Bot Token" />
+                  <p v-if="platformConfig.discord.token.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Telegram -->
+          <div class="tier-block">
+            <div class="tier-header" @click="platformOpen.telegram = !platformOpen.telegram">
+              <span class="tier-arrow" :class="{ open: platformOpen.telegram }">▶</span>
+              <span class="tier-label">Telegram</span>
+              <span class="tier-desc">Telegram Bot</span>
+            </div>
+            <div v-show="platformOpen.telegram" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group full-width">
+                  <label>Bot Token</label>
+                  <input type="password" v-model="platformConfig.telegram.token" placeholder="Telegram Bot Token" />
+                  <p v-if="platformConfig.telegram.token.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">展示工具状态</span>
+                    <p class="field-hint">在消息中显示工具调用状态。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="platformConfig.telegram.showToolStatus" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">群聊需 @ 触发</span>
+                    <p class="field-hint">在群组中必须 @ 机器人才会回复。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="platformConfig.telegram.groupMentionRequired" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 企业微信 -->
+          <div class="tier-block">
+            <div class="tier-header" @click="platformOpen.wxwork = !platformOpen.wxwork">
+              <span class="tier-arrow" :class="{ open: platformOpen.wxwork }">▶</span>
+              <span class="tier-label">企业微信</span>
+              <span class="tier-desc">企业微信机器人</span>
+            </div>
+            <div v-show="platformOpen.wxwork" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group">
+                  <label>Bot ID</label>
+                  <input type="text" v-model="platformConfig.wxwork.botId" placeholder="企业微信机器人 ID" />
+                </div>
+                <div class="form-group">
+                  <label>Secret</label>
+                  <input type="password" v-model="platformConfig.wxwork.secret" placeholder="企业微信 Secret" />
+                  <p v-if="platformConfig.wxwork.secret.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">展示工具状态</span>
+                    <p class="field-hint">在消息中显示工具调用状态。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="platformConfig.wxwork.showToolStatus" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 飞书 -->
+          <div class="tier-block">
+            <div class="tier-header" @click="platformOpen.lark = !platformOpen.lark">
+              <span class="tier-arrow" :class="{ open: platformOpen.lark }">▶</span>
+              <span class="tier-label">飞书</span>
+              <span class="tier-desc">飞书机器人</span>
+            </div>
+            <div v-show="platformOpen.lark" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group">
+                  <label>App ID</label>
+                  <input type="text" v-model="platformConfig.lark.appId" placeholder="飞书应用 App ID" />
+                </div>
+                <div class="form-group">
+                  <label>App Secret</label>
+                  <input type="password" v-model="platformConfig.lark.appSecret" placeholder="飞书应用 App Secret" />
+                  <p v-if="platformConfig.lark.appSecret.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+                <div class="form-group">
+                  <label>Verification Token</label>
+                  <input type="text" v-model="platformConfig.lark.verificationToken" placeholder="事件回调验证 Token（可选）" />
+                </div>
+                <div class="form-group">
+                  <label>Encrypt Key</label>
+                  <input type="text" v-model="platformConfig.lark.encryptKey" placeholder="事件回调加密 Key（可选）" />
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">展示工具状态</span>
+                    <p class="field-hint">在消息中显示工具调用状态。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="platformConfig.lark.showToolStatus" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- QQ -->
+          <div class="tier-block">
+            <div class="tier-header" @click="platformOpen.qq = !platformOpen.qq">
+              <span class="tier-arrow" :class="{ open: platformOpen.qq }">▶</span>
+              <span class="tier-label">QQ</span>
+              <span class="tier-desc">QQ 机器人（OneBot）</span>
+            </div>
+            <div v-show="platformOpen.qq" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group full-width">
+                  <label>WebSocket URL</label>
+                  <input type="text" v-model="platformConfig.qq.wsUrl" placeholder="ws://127.0.0.1:8080" />
+                </div>
+                <div class="form-group">
+                  <label>Access Token</label>
+                  <input type="password" v-model="platformConfig.qq.accessToken" placeholder="OneBot Access Token（可选）" />
+                  <p v-if="platformConfig.qq.accessToken.startsWith('****')" class="field-hint">已读取已保存值，保持不变则不会覆盖。</p>
+                </div>
+                <div class="form-group">
+                  <label>Self ID</label>
+                  <input type="text" v-model="platformConfig.qq.selfId" placeholder="机器人 QQ 号" />
+                </div>
+                <div class="form-group">
+                  <label>群聊模式</label>
+                  <AppSelect v-model="platformConfig.qq.groupMode" :options="qqGroupModeOptions" />
+                  <p class="field-hint">at=需要@触发，all=所有消息触发，off=不响应群聊。</p>
+                </div>
+                <div class="settings-switch-row">
+                  <div>
+                    <span class="switch-label">展示工具状态</span>
+                    <p class="field-hint">在消息中显示工具调用状态。</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="platformConfig.qq.showToolStatus" />
+                    <span class="toggle-switch-ui"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-section">
           <div class="settings-section-head">
             <div>
@@ -561,6 +943,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref, reactive } from 'vue'
 import AppIcon from './AppIcon.vue'
 import AppSelect from './AppSelect.vue'
 import { ICONS } from '../constants/icons'
@@ -605,6 +988,61 @@ const modeToolModeOptions = [
   { value: 'all', label: '全部工具', description: '不限制工具使用' },
   { value: 'include', label: '白名单', description: '仅允许指定工具' },
   { value: 'exclude', label: '黑名单', description: '排除指定工具' },
+]
+
+const visionOptions = [
+  { value: 'auto', label: '自动', description: '由提供商判断' },
+  { value: 'yes', label: '支持', description: '显式声明支持图片输入' },
+  { value: 'no', label: '不支持', description: '显式声明不支持图片输入' },
+]
+
+const cuEnvironmentOptions = [
+  { value: 'browser', label: 'Browser', description: '使用 Playwright 浏览器' },
+  { value: 'screen', label: 'Screen', description: '使用系统桌面截图与鼠标键盘' },
+]
+
+const cuScreenshotFormatOptions = [
+  { value: 'png', label: 'PNG', description: '无损格式' },
+  { value: 'jpeg', label: 'JPEG', description: '有损压缩，体积更小' },
+]
+
+const cuToolModeOptions = [
+  { value: 'all', label: '全部工具', description: '不限制' },
+  { value: 'include', label: '白名单', description: '仅允许指定工具' },
+  { value: 'exclude', label: '黑名单', description: '排除指定工具' },
+]
+
+const cuEnvToolKeys = [
+  { key: 'browser', label: 'Browser 环境', modeKey: 'envToolBrowserMode' as const, listKey: 'envToolBrowserList' as const },
+  { key: 'screen', label: 'Screen 环境', modeKey: 'envToolScreenMode' as const, listKey: 'envToolScreenList' as const },
+  { key: 'background', label: 'Background 环境', modeKey: 'envToolBackgroundMode' as const, listKey: 'envToolBackgroundList' as const },
+]
+
+const cuToolPolicyOpen = ref(false)
+
+const platformTypeOptions = [
+  { value: 'console', label: 'Console' },
+  { value: 'web', label: 'Web' },
+  { value: 'discord', label: 'Discord' },
+  { value: 'telegram', label: 'Telegram' },
+  { value: 'wxwork', label: '企业微信' },
+  { value: 'lark', label: '飞书' },
+  { value: 'qq', label: 'QQ' },
+]
+
+const platformOpen = reactive({
+  web: false,
+  discord: false,
+  telegram: false,
+  wxwork: false,
+  lark: false,
+  qq: false,
+})
+
+const qqGroupModeOptions = [
+  { value: 'at', label: '@ 触发', description: '群聊中需要 @ 机器人' },
+  { value: 'all', label: '全部消息', description: '响应群内所有消息' },
+  { value: 'off', label: '关闭', description: '不响应群聊消息' },
 ]
 
 function buildModelCatalogSelectOptions(options: Array<{ id: string; label: string }>) {
@@ -675,6 +1113,10 @@ const {
   modeEntries,
   addModeEntry,
   removeModeEntry,
+  computerUse,
+  platformConfig,
+  contextWindowPlaceholder,
+  handleStringNumberInput,
   cf,
   streamHint,
   resetOverlayCloseIntent,

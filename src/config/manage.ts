@@ -52,6 +52,18 @@ export function sanitizeConfig(data: any): any {
     result.platform.web.managementToken = maskSensitive(String(result.platform.web.managementToken));
   }
 
+  if (result.platform?.wxwork?.secret) {
+    result.platform.wxwork.secret = maskSensitive(String(result.platform.wxwork.secret));
+  }
+
+  if (result.platform?.lark?.appSecret) {
+    result.platform.lark.appSecret = maskSensitive(String(result.platform.lark.appSecret));
+  }
+
+  if (result.platform?.qq?.accessToken) {
+    result.platform.qq.accessToken = maskSensitive(String(result.platform.qq.accessToken));
+  }
+
   if (result.cloudflare?.apiToken) {
     result.cloudflare.apiToken = maskSensitive(String(result.cloudflare.apiToken));
   }
