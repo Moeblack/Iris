@@ -50,6 +50,8 @@ export async function applyRuntimeConfigReload(
   context.backend.reloadConfig({
     stream: mergedConfig.system?.stream,
     maxToolRounds: mergedConfig.system?.maxToolRounds,
+    retryOnError: mergedConfig.system?.retryOnError,
+    maxRetries: mergedConfig.system?.maxRetries,
     toolsConfig,
     systemPrompt: mergedConfig.system?.systemPrompt || DEFAULT_SYSTEM_PROMPT,
     currentLLMConfig: newRouter.getCurrentConfig(),

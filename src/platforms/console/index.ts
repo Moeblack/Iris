@@ -189,6 +189,13 @@ export class ConsolePlatform extends PlatformAdapter {
       }
     });
 
+    this.backend.on('retry', (sid: string, attempt: number, maxRetries: number, error: string) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.setRetryInfo({ attempt, maxRetries, error });
+      }
+    });
+
+
     this.backend.on('done', (sid: string, durationMs: number) => {
       if (sid === this.sessionId) {
         this.appHandle?.finalizeResponse(durationMs);

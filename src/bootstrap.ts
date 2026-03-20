@@ -174,6 +174,8 @@ export async function bootstrap(): Promise<BootstrapResult> {
   const backend = new Backend(router, storage, tools, toolState, prompt, {
     maxToolRounds: config.system.maxToolRounds,
     stream: config.system.stream,
+    retryOnError: config.system.retryOnError,
+    maxRetries: config.system.maxRetries,
     toolsConfig: config.tools,
     autoRecall,
     subAgentGuidance,

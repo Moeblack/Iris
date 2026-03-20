@@ -250,6 +250,10 @@ function appendMergedPart(parts: Part[], nextPart: Part, now: number, thoughtTim
 export interface BackendConfig {
   /** 工具执行最大轮次 */
   maxToolRounds?: number;
+  /** LLM 调用报错时是否自动重试 */
+  retryOnError?: boolean;
+  /** 自动重试最大次数 */
+  maxRetries?: number;
   /** 工具执行策略配置 */
   toolsConfig?: ToolsConfig;
   /** 是否启用流式输出 */
@@ -285,6 +289,8 @@ export interface BackendEvents {
   'error': (sessionId: string, error: string) => void;
   /** Token 用量（每轮 LLM 调用后发出） */
   'usage': (sessionId: string, usage: UsageMetadata) => void;
+  /** LLM 调用重试（attempt 从 1 开始，maxRetries 为允许的最大重试次数） */
+  'retry': (sessionId: string, attempt: number, maxRetries: number, error: string) => void;
   /** 当前用户回合完成（统一耗时来源） */
   'done': (sessionId: string, durationMs: number) => void;
   /** 一轮模型输出完成后的完整内容（结构化） */
@@ -350,6 +356,8 @@ export class Backend extends EventEmitter {
     this.toolLoopConfig = {
       maxRounds: config?.maxToolRounds ?? 200,
       toolsConfig: config?.toolsConfig ?? { permissions: {} },
+      retryOnError: config?.retryOnError ?? true,
+      maxRetries: config?.maxRetries ?? 3,
     };
     this.toolLoop = new ToolLoop(tools, prompt, this.toolLoopConfig, toolState);
 
@@ -677,6 +685,8 @@ export class Backend extends EventEmitter {
   reloadConfig(opts: {
     stream?: boolean;
     maxToolRounds?: number;
+    retryOnError?: boolean;
+    maxRetries?: number;
     toolsConfig?: ToolsConfig;
     systemPrompt?: string;
     currentLLMConfig?: LLMConfig;
@@ -686,6 +696,8 @@ export class Backend extends EventEmitter {
     if (opts.stream !== undefined) this.stream = opts.stream;
     if (opts.maxToolRounds !== undefined) this.toolLoopConfig.maxRounds = opts.maxToolRounds;
     if (opts.toolsConfig !== undefined) this.toolLoopConfig.toolsConfig = opts.toolsConfig;
+    if (opts.retryOnError !== undefined) this.toolLoopConfig.retryOnError = opts.retryOnError;
+    if (opts.maxRetries !== undefined) this.toolLoopConfig.maxRetries = opts.maxRetries;
     if (opts.systemPrompt !== undefined) this.prompt.setSystemPrompt(opts.systemPrompt);
     if ('currentLLMConfig' in opts) this.currentLLMConfig = opts.currentLLMConfig;
     if ('ocrService' in opts) this.ocrService = opts.ocrService;
@@ -783,6 +795,9 @@ export class Backend extends EventEmitter {
       extraParts,
       onMessageAppend: (content) => this.storage.addMessage(sessionId, content),
       signal,
+      onRetry: (attempt, maxRetries, error) => {
+        this.emit('retry', sessionId, attempt, maxRetries, error);
+      },
     });
 
     // 6.1. 如果被 abort，提前退出，不做后续处理

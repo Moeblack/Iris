@@ -39,6 +39,10 @@ export interface ToolLoopConfig {
   maxRounds: number;
   /** 工具配置（含全局开关和按工具策略） */
   toolsConfig: ToolsConfig;
+  /** LLM 调用报错时是否自动重试 */
+  retryOnError?: boolean;
+  /** 自动重试最大次数（默认 3） */
+  maxRetries?: number;
 }
 
 /** ToolLoop 执行结果 */
@@ -63,6 +67,8 @@ export interface ToolLoopRunOptions {
   modelName?: string;
   /** 中止信号：触发后安全退出循环并清理历史 */
   signal?: AbortSignal;
+  /** LLM 调用重试时的回调（attempt 从 1 开始） */
+  onRetry?: (attempt: number, maxRetries: number, error: string) => void;
 }
 
 export class ToolLoop {
@@ -109,20 +115,12 @@ export class ToolLoop {
       // 调用 LLM（具体方式由 callLLM 决定）
       let modelContent: Content;
       try {
-        modelContent = await callLLM(request, options?.modelName, signal);
-      } catch (err: unknown) {
-        // abort 引起的错误：安全退出
-        if (signal?.aborted) {
-          return this.buildAbortResult(history, historyBaseLength);
-        }
-        // 其他 LLM 调用失败：不中断整个对话，返回错误信息让上层可以保存已有历史
+        modelContent = await this.callLLMWithRetry(callLLM, request, options, rounds, signal);
+      } catch (err) {
+        if (signal?.aborted) return this.buildAbortResult(history, historyBaseLength);
         const errorMsg = err instanceof Error ? err.message : String(err);
         logger.error(`LLM 调用失败 (round=${rounds}): ${errorMsg}`);
-        return {
-          text: '',
-          error: `LLM 调用出错: ${errorMsg}`,
-          history,
-        };
+        return { text: '', error: `LLM 调用出错: ${errorMsg}`, history };
       }
 
       // abort 可能在 LLM 调用过程中触发，但 callLLM 没有抛异常（比如流式已读完部分数据）
@@ -163,6 +161,44 @@ export class ToolLoop {
       history,
     };
   }
+
+  /**
+   * 带重试的 LLM 调用。
+   *
+   * 重试策略：指数退避（1s → 2s → 4s → …），上限 10s。
+   * 每次重试前通过 onRetry 回调通知调用方（用于 UI 显示）。
+   */
+  private async callLLMWithRetry(
+    callLLM: LLMCaller,
+    request: LLMRequest,
+    options: ToolLoopRunOptions | undefined,
+    round: number,
+    signal?: AbortSignal,
+  ): Promise<Content> {
+    const maxRetries = this.config.retryOnError ? (this.config.maxRetries ?? 3) : 0;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+        const errorMsg = lastError?.message ?? 'unknown error';
+        logger.warn(`LLM 调用重试 (round=${round}, attempt ${attempt}/${maxRetries}): ${errorMsg}`);
+        options?.onRetry?.(attempt, maxRetries, errorMsg);
+        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        if (signal?.aborted) throw new Error('aborted');
+      }
+
+      try {
+        return await callLLM(request, options?.modelName, signal);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+
+    throw lastError!;
+  }
+
 
   /**
    * 构建 abort 结果：清理历史中不完整的消息，保证格式合法。

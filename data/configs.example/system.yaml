@@ -9,6 +9,12 @@ maxToolRounds: 200
 # 流式输出
 stream: true
 
+# LLM 调用报错自动重试（默认开启）
+retryOnError: true
+
+# 最大重试次数（默认 3）
+maxRetries: 3
+
 # 子代理最大嵌套深度（默认 3）
 # maxAgentDepth: 3
 

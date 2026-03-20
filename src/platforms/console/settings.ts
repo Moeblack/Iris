@@ -71,6 +71,8 @@ export interface ConsoleSettingsSnapshot {
     systemPrompt: string;
     maxToolRounds: number;
     stream: boolean;
+    retryOnError: boolean;
+    maxRetries: number;
   };
   toolPolicies: ConsoleToolPolicySettings[];
   mcpServers: ConsoleMCPServerSettings[];
@@ -168,6 +170,10 @@ function buildModelPayload(model: ConsoleModelSettings): Record<string, unknown>
 function validateSnapshot(snapshot: ConsoleSettingsSnapshot): string | null {
   if (!Number.isFinite(snapshot.system.maxToolRounds) || snapshot.system.maxToolRounds < 1 || snapshot.system.maxToolRounds > 2000) {
     return '工具最大轮次必须在 1 到 2000 之间';
+  }
+
+  if (!Number.isFinite(snapshot.system.maxRetries) || snapshot.system.maxRetries < 0 || snapshot.system.maxRetries > 20) {
+    return '最大重试次数必须在 0 到 20 之间';
   }
 
   if (!Array.isArray(snapshot.models) || snapshot.models.length === 0) {
@@ -347,6 +353,8 @@ export class ConsoleSettingsController {
         systemPrompt: system.systemPrompt,
         maxToolRounds: system.maxToolRounds,
         stream: system.stream,
+        retryOnError: system.retryOnError,
+        maxRetries: system.maxRetries,
       },
       toolPolicies: allToolNames.map(name => ({
         name,
@@ -394,6 +402,8 @@ export class ConsoleSettingsController {
         systemPrompt: draft.system.systemPrompt,
         maxToolRounds: draft.system.maxToolRounds,
         stream: draft.system.stream,
+        retryOnError: draft.system.retryOnError,
+        maxRetries: draft.system.maxRetries,
       },
       tools: draft.toolPolicies.reduce((result: Record<string, Record<string, unknown>>, tool) => {
         if (!tool.configured) {

@@ -138,6 +138,10 @@ export interface SystemConfig {
   systemPrompt: string;
   maxToolRounds: number;
   stream: boolean;
+  /** LLM 调用报错时是否自动重试，默认 true */
+  retryOnError: boolean;
+  /** 自动重试最大次数，默认 3 */
+  maxRetries: number;
   /** 子代理最大嵌套深度，默认 3 */
   maxAgentDepth: number;
   /** 默认模式名称（可选，需与 modes 中定义的名称对应） */

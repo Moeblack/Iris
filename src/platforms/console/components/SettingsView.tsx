@@ -30,7 +30,7 @@ type RowTarget =
   | { kind: 'modelProvider'; modelIndex: number }
   | { kind: 'modelField'; modelIndex: number; field: 'modelName' | 'modelId' | 'apiKey' | 'baseUrl' }
   | { kind: 'modelDefault'; modelIndex: number }
-  | { kind: 'systemField'; field: 'systemPrompt' | 'maxToolRounds' | 'stream' }
+  | { kind: 'systemField'; field: 'systemPrompt' | 'maxToolRounds' | 'stream' | 'retryOnError' | 'maxRetries' }
   | { kind: 'toolPolicy'; toolIndex: number }
   | { kind: 'toolApprovalView'; toolIndex: number }
   | { kind: 'mcpField'; serverIndex: number; field: 'name' | 'enabled' | 'transport' | 'command' | 'args' | 'cwd' | 'url' | 'authHeader' | 'timeout' }
@@ -206,6 +206,8 @@ function buildRows(snapshot: ConsoleSettingsSnapshot, termWidth: number): Settin
   pushField('system.systemPrompt', 'general', 'System / Prompt', previewText(snapshot.system.systemPrompt, maxPreview), { kind: 'systemField', field: 'systemPrompt' }, '回车编辑；\\n 表示换行。');
   pushField('system.maxToolRounds', 'general', 'System / Max Tool Rounds', String(snapshot.system.maxToolRounds), { kind: 'systemField', field: 'maxToolRounds' });
   pushField('system.stream', 'general', 'System / Stream Output', boolText(snapshot.system.stream), { kind: 'systemField', field: 'stream' }, '空格切换。');
+  pushField('system.retryOnError', 'general', 'System / 报错自动重试', boolText(snapshot.system.retryOnError), { kind: 'systemField', field: 'retryOnError' }, 'LLM 调用失败时自动重试，空格切换。');
+  pushField('system.maxRetries', 'general', 'System / 最大重试次数', String(snapshot.system.maxRetries), { kind: 'systemField', field: 'maxRetries' }, '报错重试的最大次数（0-20），回车编辑。');
 
   rows.push({ id: 'section.tools', kind: 'section', section: 'tools', label: `工具执行策略（${snapshot.toolPolicies.length}）` });
 
@@ -392,7 +394,10 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       return;
     }
     if (target.kind === 'systemField') {
-      const rawValue = target.field === 'maxToolRounds' ? String(draft.system.maxToolRounds) : target.field === 'stream' ? String(draft.system.stream) : draft.system.systemPrompt;
+      const rawValue = target.field === 'maxToolRounds' ? String(draft.system.maxToolRounds)
+        : target.field === 'maxRetries' ? String(draft.system.maxRetries)
+        : target.field === 'stream' ? String(draft.system.stream) : draft.system.systemPrompt;
+
       const value = target.field === 'systemPrompt' ? escapeMultilineForInput(rawValue) : rawValue;
       setEditor({ target, label: `system.${target.field}`, value, hint: target.field === 'systemPrompt' ? '\\n 表示换行' : undefined });
       setEditorValue(value);
@@ -444,6 +449,11 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         snapshot.system.stream = !snapshot.system.stream;
         return;
       }
+      if (target.kind === 'systemField' && target.field === 'retryOnError') {
+        snapshot.system.retryOnError = !snapshot.system.retryOnError;
+        return;
+      }
+
       if (target.kind === 'toolApprovalView') {
         const tool = snapshot.toolPolicies[target.toolIndex];
         if (tool) tool.showApprovalView = tool.showApprovalView === false;
@@ -468,6 +478,11 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       const parsed = Number(value.trim());
       if (!Number.isFinite(parsed) || parsed < 1) { setStatus('请输入大于等于 1 的有效数字', 'error'); return; }
     }
+    if (editor.target.kind === 'systemField' && editor.target.field === 'maxRetries') {
+      const parsed = Number(value.trim());
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 20) { setStatus('最大重试次数必须在 0 到 20 之间', 'error'); return; }
+    }
+
     if (editor.target.kind === 'mcpField' && editor.target.field === 'timeout') {
       const parsed = Number(value.trim());
       if (!Number.isFinite(parsed) || parsed < 1000) { setStatus('MCP 超时必须是大于等于 1000 的数字', 'error'); return; }
@@ -489,6 +504,8 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       if (editor.target.kind === 'systemField') {
         if (editor.target.field === 'systemPrompt') snapshot.system.systemPrompt = value;
         else if (editor.target.field === 'maxToolRounds') snapshot.system.maxToolRounds = Number(value.trim());
+        else if (editor.target.field === 'maxRetries') snapshot.system.maxRetries = Number(value.trim());
+
         return;
       }
       const server = snapshot.mcpServers[editor.target.serverIndex];
@@ -621,7 +638,8 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       return;
     }
     if (key.name === 'space' && selectedRow?.target) {
-      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && selectedRow.target.field === 'stream') || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
+      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && (selectedRow.target.field === 'stream' || selectedRow.target.field === 'retryOnError')) || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
+
         applyToggle(selectedRow.target);
       } else if (selectedRow.target.kind === 'toolPolicy') {
         applyCycle(selectedRow.target, 1);
@@ -634,7 +652,7 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         else handleAddModel();
         return;
       }
-      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && selectedRow.target.field === 'stream') || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
+      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && (selectedRow.target.field === 'stream' || selectedRow.target.field === 'retryOnError')) || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
         applyToggle(selectedRow.target);
         return;
       }
@@ -642,9 +660,10 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         applyCycle(selectedRow.target, 1);
         return;
       }
-      if (selectedRow.target.kind === 'modelField' || (selectedRow.target.kind === 'systemField' && selectedRow.target.field !== 'stream') || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field !== 'enabled' && selectedRow.target.field !== 'transport')) {
+      if (selectedRow.target.kind === 'modelField' || (selectedRow.target.kind === 'systemField' && selectedRow.target.field !== 'stream' && selectedRow.target.field !== 'retryOnError') || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field !== 'enabled' && selectedRow.target.field !== 'transport')) {
         startEdit(selectedRow.target as Extract<RowTarget, { kind: 'modelField' | 'systemField' | 'mcpField' }>);
       }
+
     }
   });
 

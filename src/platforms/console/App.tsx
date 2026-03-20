@@ -13,7 +13,8 @@ import type { LLMModelInfo } from '../../llm/router';
 import { ToolInvocation } from '../../types';
 import { SessionMeta } from '../../storage/base';
 import { MessageItem, ChatMessage, MessagePart } from './components/MessageItem';
-import { GeneratingTimer } from './components/GeneratingTimer';
+import { GeneratingTimer, RetryInfo } from './components/GeneratingTimer';
+
 import { InputBar } from './components/InputBar';
 import { DiffApprovalView } from './components/DiffApprovalView';
 import { SettingsView } from './components/SettingsView';
@@ -97,6 +98,8 @@ export interface AppHandle {
   clearMessages(): void;
   commitTools(): void;
   setUsage(usage: UsageMetadata): void;
+  setRetryInfo(info: { attempt: number; maxRetries: number; error: string } | null): void;
+
   finalizeResponse(durationMs: number): void;
 }
 
@@ -142,6 +145,8 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
   const [modelList, setModelList] = useState<LLMModelInfo[]>([]);
   const [exitConfirmArmed, setExitConfirmArmed] = useState(false);
   const [copyMode, setCopyMode] = useState(false);
+  const [retryInfo, setRetryInfo] = useState<RetryInfo | null>(null);
+
 
   const { width: termWidth } = useTerminalDimensions();
   const renderer = useRenderer();
@@ -299,6 +304,8 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
           streamPartsRef.current = [];
         }
         setIsGenerating(generating);
+        setRetryInfo(null);
+
       },
       clearMessages() { setMessages([]); setStreamingParts([]); streamPartsRef.current = []; uncommittedStreamPartsRef.current = []; },
       commitTools() { toolInvocationsRef.current = []; setPendingApprovals([]); setPendingApplies([]); },
@@ -315,6 +322,8 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
         });
         lastUsageRef.current = null;
       },
+      setRetryInfo(info) { setRetryInfo(info); },
+
     };
     onReady(handle);
   }, [onReady]);
@@ -597,7 +606,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
         {activeMessage && (
           <box flexDirection="column" paddingBottom={1}>
             <MessageItem msg={activeMessage} liveParts={streamingParts.length > 0 ? streamingParts : undefined} isStreaming={isStreaming} modelName={currentModelName} />
-            {isStreaming && streamingParts.length === 0 && <GeneratingTimer isGenerating={isGenerating} />}
+            {isStreaming && streamingParts.length === 0 && <GeneratingTimer isGenerating={isGenerating} retryInfo={retryInfo} />}
           </box>
         )}
         {isGenerating && !activeMessage && (
@@ -605,7 +614,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
             {streamingParts.length > 0 ? (
               <MessageItem msg={{ id: 'tmp', role: 'assistant', parts: [] }} liveParts={streamingParts} isStreaming={isStreaming} modelName={currentModelName} />
             ) : (
-              <GeneratingTimer isGenerating={isGenerating} />
+              <GeneratingTimer isGenerating={isGenerating} retryInfo={retryInfo} />
             )}
           </box>
         )}
