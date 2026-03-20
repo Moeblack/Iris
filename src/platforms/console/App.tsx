@@ -654,7 +654,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
         )}
         <box flexDirection="row" justifyContent="flex-end" paddingTop={0} paddingRight={1}>
           <text fg={exitConfirmArmed ? C.warn : C.dim}>
-            {isGenerating ? 'esc 中断生成' : 'tab 补全'}
+            {isGenerating ? 'esc 中断生成' : 'ctrl+j 换行'}
             {'  ·  '}
             {copyMode ? 'f6 返回滚动模式' : 'f6 复制模式'}
             {'  ·  '}
