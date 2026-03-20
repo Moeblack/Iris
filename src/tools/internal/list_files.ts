@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ToolDefinition } from '../../types';
 import { resolveProjectPath } from '../utils';
+import { getToolLimits } from '../tool-limits';
 
 const DEFAULT_IGNORED = new Set(['.git', 'node_modules']);
 
@@ -25,18 +26,20 @@ interface ListResult {
   error?: string;
 }
 
-function listRecursive(dirPath: string, basePath: string, entries: Entry[]): void {
+function listRecursive(dirPath: string, basePath: string, entries: Entry[], maxEntries: number): boolean {
   const items = fs.readdirSync(dirPath, { withFileTypes: true });
   for (const item of items) {
     if (DEFAULT_IGNORED.has(item.name)) continue;
+    if (entries.length >= maxEntries) return true;
     const relativePath = basePath ? path.join(basePath, item.name) : item.name;
     if (item.isDirectory()) {
       entries.push({ name: relativePath + '/', type: 'directory' });
-      listRecursive(path.join(dirPath, item.name), relativePath, entries);
+      if (listRecursive(path.join(dirPath, item.name), relativePath, entries, maxEntries)) return true;
     } else if (item.isFile()) {
       entries.push({ name: relativePath, type: 'file' });
     }
   }
+  return false;
 }
 
 export const listFiles: ToolDefinition = {
@@ -66,6 +69,8 @@ export const listFiles: ToolDefinition = {
     },
   },
   handler: async (args) => {
+    const maxEntries = getToolLimits().list_files.maxEntries;
+
     let pathList = args.paths as string[] | undefined;
     if (!pathList || !Array.isArray(pathList) || pathList.length === 0) {
       pathList = ['.'];
@@ -75,14 +80,16 @@ export const listFiles: ToolDefinition = {
     const results: ListResult[] = [];
     let totalFiles = 0;
     let totalDirs = 0;
+    let truncated = false;
 
     for (const dirPath of pathList) {
       try {
         const resolved = resolveProjectPath(dirPath);
         const entries: Entry[] = [];
+        let dirTruncated = false;
 
         if (recursive) {
-          listRecursive(resolved, '', entries);
+          dirTruncated = listRecursive(resolved, '', entries, maxEntries);
         } else {
           const items = fs.readdirSync(resolved, { withFileTypes: true });
           for (const item of items) {
@@ -104,7 +111,12 @@ export const listFiles: ToolDefinition = {
         const fileCount = entries.filter(e => e.type === 'file').length;
         const dirCount = entries.filter(e => e.type === 'directory').length;
 
-        results.push({ path: dirPath, entries, fileCount, dirCount, success: true });
+        const listResult: ListResult = { path: dirPath, entries, fileCount, dirCount, success: true };
+        if (dirTruncated) {
+          listResult.error = `条目数达到上限 (${maxEntries})，结果已截断`;
+          truncated = true;
+        }
+        results.push(listResult);
         totalFiles += fileCount;
         totalDirs += dirCount;
       } catch (err) {
@@ -119,6 +131,8 @@ export const listFiles: ToolDefinition = {
       }
     }
 
-    return { results, totalFiles, totalDirs, totalPaths: pathList.length };
+    const output: Record<string, unknown> = { results, totalFiles, totalDirs, totalPaths: pathList.length };
+    if (truncated) output.truncated = true;
+    return output;
   },
 };

@@ -9,6 +9,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ToolDefinition } from '../../types';
 import { normalizeObjectArrayArg, resolveProjectPath } from '../utils';
+import { getToolLimits } from '../tool-limits';
 
 /** 支持的文本文件扩展名 */
 const TEXT_EXTENSIONS = new Set([
@@ -106,6 +107,7 @@ export const readFile: ToolDefinition = {
     },
   },
   handler: async (args) => {
+    const limits = getToolLimits().read_file;
     const fileList = normalizeObjectArrayArg(args, {
       arrayKey: 'files',
       singularKeys: ['file'],
@@ -119,13 +121,28 @@ export const readFile: ToolDefinition = {
     const results: ReadResult[] = [];
     let successCount = 0;
     let failCount = 0;
+    let totalOutputChars = 0;
 
-    for (const fileReq of fileList) {
+    // 文件数量上限
+    const cappedList = fileList.length > limits.maxFiles
+      ? fileList.slice(0, limits.maxFiles)
+      : fileList;
+    const filesCapped = fileList.length > limits.maxFiles;
+
+    for (const fileReq of cappedList) {
       try {
         const resolved = resolveProjectPath(fileReq.path);
 
         if (!isTextFile(fileReq.path)) {
           throw new Error(`不支持的文件类型: ${path.extname(fileReq.path) || '(无扩展名)'}`);
+        }
+
+        // 文件大小检查
+        const stat = await fs.stat(resolved);
+        if (stat.size > limits.maxFileSizeBytes) {
+          throw new Error(
+            `文件过大 (${stat.size} bytes > ${limits.maxFileSizeBytes} bytes)，请使用 startLine/endLine 分段读取`,
+          );
         }
 
         const raw = await fs.readFile(resolved, 'utf-8');
@@ -141,6 +158,17 @@ export const readFile: ToolDefinition = {
 
         const sliced = allLines.slice(startLine - 1, endLine);
         const formatted = formatWithLineNumbers(sliced.join('\n'), startLine);
+
+        // 总输出字符数安全检查
+        totalOutputChars += formatted.length;
+        if (totalOutputChars > limits.maxTotalOutputChars) {
+          results.push({
+            path: fileReq.path, success: false,
+            error: `总输出已达上限 (${limits.maxTotalOutputChars} chars)，后续文件已跳过。请使用 startLine/endLine 分段读取`,
+          });
+          failCount++;
+          break;  // 停止处理后续文件
+        }
 
         const result: ReadResult = {
           path: fileReq.path,
@@ -169,6 +197,13 @@ export const readFile: ToolDefinition = {
       }
     }
 
-    return { results, successCount, failCount, totalCount: fileList.length };
+    const output: Record<string, unknown> = { results, successCount, failCount, totalCount: cappedList.length };
+
+    if (filesCapped) {
+      output.warning = `文件数量已截断: 请求 ${fileList.length} 个，上限 ${limits.maxFiles} 个`;
+      output.totalCount = fileList.length;
+    }
+
+    return output;
   },
 };

@@ -19,6 +19,7 @@ import { createMCPManager, MCPManager } from './mcp';
 import { OCRService } from './ocr';
 import { ToolRegistry } from './tools/registry';
 import { ToolStateManager } from './tools/state';
+import { setToolLimits } from './tools/tool-limits';
 import { readFile } from './tools/internal/read_file';
 import { searchInFiles } from './tools/internal/search_in_files';
 import { shell } from './tools/internal/shell';
@@ -85,6 +86,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
 
   // ---- 3. 注册工具 ----
   const tools = new ToolRegistry();
+  setToolLimits(config.tools.limits);
   tools.registerAll([readFile, writeFile, applyDiff, searchInFiles, findFiles, shell, listFiles, deleteFile, createDirectory, insertCode, deleteCode]);
   if (memory) {
     const { createMemoryTools } = await import('./memory');

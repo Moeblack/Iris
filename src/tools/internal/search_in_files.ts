@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ToolDefinition } from '../../types';
 import { resolveProjectPath } from '../utils';
+import { getToolLimits } from '../tool-limits';
 
 /** 默认忽略目录（仅按目录名判断） */
 const DEFAULT_IGNORED_DIRS = new Set([
@@ -29,12 +30,6 @@ const DEFAULT_IGNORED_DIRS = new Set([
 ]);
 
 const DEFAULT_PATTERN = '**/*';
-const DEFAULT_MAX_RESULTS = 100;
-const DEFAULT_MAX_FILES = 50;
-const DEFAULT_CONTEXT_LINES = 2;
-
-/** 单文件读取大小上限（字节）。过大文件会被跳过。 */
-const DEFAULT_MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
 
 /** 采样字节数，用于二进制检测 */
 const BINARY_DETECT_BYTES = 8 * 1024;
@@ -260,14 +255,22 @@ function findLineIndex(lineStarts: number[], offset: number): number {
   return Math.max(0, lo - 1);
 }
 
-function buildContext(lines: string[], lineNumber1Based: number, contextLines: number): string {
+function truncateLine(line: string, max: number): string {
+  if (line.length <= max) return line;
+  // 保留前部 + 尾部少量，中间标记截断
+  const head = Math.floor(max * 0.75);
+  const tail = Math.floor(max * 0.15);
+  return line.slice(0, head) + ` ... [${line.length} chars] ... ` + line.slice(-tail);
+}
+
+function buildContext(lines: string[], lineNumber1Based: number, contextLines: number, maxLineChars: number): string {
   const total = lines.length;
   const start = Math.max(1, lineNumber1Based - contextLines);
   const end = Math.min(total, lineNumber1Based + contextLines);
 
   const out: string[] = [];
   for (let ln = start; ln <= end; ln++) {
-    out.push(`${ln}: ${lines[ln - 1] ?? ''}`);
+    out.push(`${ln}: ${truncateLine(lines[ln - 1] ?? '', maxLineChars)}`);
   }
   return out.join('\n');
 }
@@ -360,16 +363,19 @@ export const searchInFiles: ToolDefinition = {
     },
   },
   handler: async (args) => {
+    const limits = getToolLimits().search_in_files;
+
     const mode = ((args.mode as ToolMode | undefined) ?? 'search');
     const query = String(args.query ?? '');
 
     const inputPath = (args.path as string | undefined) ?? '.';
     const pattern = (args.pattern as string | undefined) ?? DEFAULT_PATTERN;
     const isRegex = (args.isRegex as boolean | undefined) ?? false;
-    const maxResults = clampPositiveInteger(args.maxResults, DEFAULT_MAX_RESULTS);
-    const maxFiles = clampPositiveInteger(args.maxFiles, DEFAULT_MAX_FILES);
-    const contextLines = clampPositiveInteger(args.contextLines, DEFAULT_CONTEXT_LINES);
-    const maxFileSizeBytes = clampPositiveInteger(args.maxFileSizeBytes, DEFAULT_MAX_FILE_SIZE_BYTES);
+    // LLM 传入的值不得超过配置上限
+    const maxResults = Math.min(clampPositiveInteger(args.maxResults, limits.maxResults), limits.maxResults);
+    const maxFiles = Math.min(clampPositiveInteger(args.maxFiles, limits.maxFiles), limits.maxFiles);
+    const contextLines = Math.min(clampPositiveInteger(args.contextLines, limits.contextLines), limits.contextLines);
+    const maxFileSizeBytes = Math.min(clampPositiveInteger(args.maxFileSizeBytes, limits.maxFileSizeBytes), limits.maxFileSizeBytes);
 
     if (mode !== 'search' && mode !== 'replace') {
       throw new Error(`mode 参数无效: ${String(args.mode)}`);
@@ -437,8 +443,8 @@ export const searchInFiles: ToolDefinition = {
             file: stat.isDirectory() ? toPosix(path.join(inputPath, relPosix)) : toPosix(inputPath),
             line: lineNumber,
             column,
-            match: m[0],
-            context: buildContext(lines, lineNumber, contextLines),
+            match: truncateLine(m[0], limits.maxMatchDisplayChars),
+            context: buildContext(lines, lineNumber, contextLines, limits.maxLineDisplayChars),
           });
 
           if (shouldStop()) {

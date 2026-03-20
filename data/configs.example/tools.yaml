@@ -1,5 +1,40 @@
 # 工具配置
 #
+# ─── 工具防御性参数（防止输出过大撑爆 LLM 上下文） ───
+#
+# 所有参数均有内置默认值，通常无需修改。
+# 如需调整，取消对应行的注释即可。
+#
+limits:
+  # ── read_file ──
+  read_file:
+    maxFiles: 10                   # 单次调用最多读取文件数
+    maxFileSizeBytes: 2097152      # 单文件最大字节数 (2MB)
+    maxTotalOutputChars: 200000    # 所有文件格式化后的总输出字符数上限
+
+  # ── search_in_files ──
+  search_in_files:
+    maxResults: 100                # 最大匹配结果数 (search 模式)
+    maxFiles: 50                   # 最大处理文件数 (replace 模式)
+    contextLines: 2                # 每条匹配的上下文行数
+    maxFileSizeBytes: 2097152      # 单文件最大字节数 (2MB)，超过则跳过
+    maxLineDisplayChars: 500       # 结果中单行最大展示字符数 (防 minified 文件撑爆)
+    maxMatchDisplayChars: 200      # 匹配文本最大展示字符数
+
+  # ── list_files ──
+  list_files:
+    maxEntries: 2000               # 递归列出时最大条目数
+
+  # ── find_files ──
+  find_files:
+    maxResults: 500                # 每个 pattern 的最大结果数
+
+  # ── shell ──
+  shell:
+    defaultTimeout: 30000          # 默认超时 (毫秒)
+    maxOutputChars: 50000          # stdout/stderr 各自的最大字符数
+    maxBuffer: 10485760            # Node.js exec maxBuffer 字节数 (10MB)
+
 # ─── 全局审批开关（最高优先级） ───
 #
 # 全部自动批准（跳过一类 + 二类审批）

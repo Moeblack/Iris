@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ToolDefinition } from '../../types';
 import { resolveProjectPath } from '../utils';
+import { getToolLimits } from '../tool-limits';
 
 /** 默认排除模式 */
 const DEFAULT_EXCLUDE = '**/node_modules/**';
@@ -27,8 +28,6 @@ const DEFAULT_IGNORED_DIRS = new Set([
   '.turbo',
   '.limcode',
 ]);
-
-const DEFAULT_MAX_RESULTS = 500;
 
 function toPosix(p: string): string {
   return p.split(path.sep).join('/');
@@ -176,7 +175,8 @@ export const findFiles: ToolDefinition = {
     }
 
     const exclude = (args.exclude as string | undefined) ?? DEFAULT_EXCLUDE;
-    const maxResults = clampPositiveInteger(args.maxResults, DEFAULT_MAX_RESULTS);
+    const configMax = getToolLimits().find_files.maxResults;
+    const maxResults = Math.min(clampPositiveInteger(args.maxResults, configMax), configMax);
 
     const rootAbs = resolveProjectPath('.');
     const patternRes = patternList.map(p => ({

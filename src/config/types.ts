@@ -121,6 +121,8 @@ export interface ToolPolicyConfig {
 }
 
 export interface ToolsConfig {
+  /** 工具防御性参数限制（可选，缺省使用内置默认值） */
+  limits?: Partial<import('../tools/tool-limits').ToolLimitsConfig>;
   /** 全局：跳过所有审批（一类 + 二类），最高优先级 */
   autoApproveAll?: boolean;
   /** 全局：跳过所有一类审批（Y/N 确认） */

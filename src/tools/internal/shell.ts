@@ -8,12 +8,7 @@
 import { exec } from 'child_process';
 import { ToolDefinition } from '../../types';
 import { resolveProjectPath } from '../utils';
-
-/** 默认超时 30 秒 */
-const DEFAULT_TIMEOUT = 30_000;
-
-/** 输出最大长度（字符） */
-const MAX_OUTPUT_LENGTH = 50_000;
+import { getToolLimits } from '../tool-limits';
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -49,9 +44,11 @@ export const shell: ToolDefinition = {
     },
   },
   handler: async (args) => {
+    const limits = getToolLimits().shell;
+
     const command = args.command as string;
     const cwd = args.cwd as string | undefined;
-    const timeout = (args.timeout as number | undefined) ?? DEFAULT_TIMEOUT;
+    const timeout = (args.timeout as number | undefined) ?? limits.defaultTimeout;
 
     // 解析工作目录（安全检查：禁止超出项目范围）
     const projectRoot = process.cwd();
@@ -63,7 +60,7 @@ export const shell: ToolDefinition = {
         {
           cwd: workDir,
           timeout,
-          maxBuffer: 10 * 1024 * 1024, // 10MB
+          maxBuffer: limits.maxBuffer,
           shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
         },
         (error, stdout, stderr) => {
@@ -74,8 +71,8 @@ export const shell: ToolDefinition = {
             command,
             exitCode,
             killed,
-            stdout: truncate(stdout, MAX_OUTPUT_LENGTH),
-            stderr: truncate(stderr, MAX_OUTPUT_LENGTH),
+            stdout: truncate(stdout, limits.maxOutputChars),
+            stderr: truncate(stderr, limits.maxOutputChars),
           });
         },
       );
