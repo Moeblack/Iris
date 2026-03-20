@@ -13,7 +13,7 @@
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as fs from 'fs';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import type { LLMConfig, ToolsConfig, ToolPolicyConfig } from '../config/types';
 import { LLMRouter } from '../llm/router';
 import { supportsVision as llmSupportsVision, isDocumentMimeType, supportsNativePDF, supportsNativeOffice } from '../llm/vision';
@@ -568,20 +568,22 @@ export class Backend extends EventEmitter {
     }
 
     // 执行其余命令
-    try {
-      const output = execSync(trimmed, {
-        cwd: process.cwd(),
-        encoding: 'utf-8',
-        timeout: 30000,
-        windowsHide: true,
-      });
-      return { output: output.trimEnd(), cwd: process.cwd() };
-    } catch (err: any) {
-      const stderr = err.stderr?.toString().trimEnd() || '';
-      const stdout = err.stdout?.toString().trimEnd() || '';
-      const combined = [stdout, stderr].filter(Boolean).join('\n');
-      throw new Error(combined || `命令执行失败 (exit code: ${err.status})`);
+    const result = spawnSync(trimmed, {
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+      timeout: 30000,
+      windowsHide: true,
+      shell: true,
+    });
+
+    const stdout = (result.stdout as string)?.trimEnd() || '';
+    const stderr = (result.stderr as string)?.trimEnd() || '';
+    const combined = [stdout, stderr].filter(Boolean).join('\n');
+
+    if (result.status !== 0) {
+      throw new Error(combined || `命令执行失败 (exit code: ${result.status})`);
     }
+    return { output: combined, cwd: process.cwd() };
   }
 
 

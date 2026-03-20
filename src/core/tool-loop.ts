@@ -25,7 +25,7 @@ import { PromptAssembler } from '../prompt/assembler';
 import { createLogger } from '../logger';
 import {
   Content, Part, LLMRequest, extractText, isFunctionCallPart,
-  FunctionCallPart,
+  FunctionCallPart, FunctionResponsePart,
 } from '../types';
 import { cleanupTrailingHistory } from './history-sanitizer';
 

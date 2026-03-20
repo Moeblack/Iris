@@ -216,7 +216,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
         clearRedo(undoRedoRef.current);
         const textPart: MessagePart = { type: 'text', text: content };
         if (role === 'assistant') { setMessages((prev) => appendAssistantParts(prev, [textPart], meta)); return; }
-        setMessages((prev) => [...prev.filter(m => !m.isError), { id: nextMsgId(), role, parts: [textPart], ...meta }]);
+        setMessages((prev) => [...prev.filter(m => !m.isError && !m.isCommand), { id: nextMsgId(), role, parts: [textPart], ...meta }]);
       },
       addErrorMessage(text) {
         setMessages((prev) => [
@@ -370,7 +370,7 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
         if (result.modelId) setCurrentModelId(result.modelId);
         if (result.modelName) setCurrentModelName(result.modelName);
         if ('contextWindow' in result) setCurrentContextWindow(result.contextWindow);
-        setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.message }] }]);
+        setMessages((prev) => [...prev.filter(m => !m.isCommand), { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.message }], isCommand: true }]);
       }
       return;
     }
@@ -380,9 +380,9 @@ export function App({ onReady, onSubmit, onUndo, onRedo, onClearRedoStack, onToo
       clearRedo(undoRedoRef.current); onClearRedoStack();
       try {
         const result = onRunCommand(cmd);
-        setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.output || '(无输出)' }] }]);
+        setMessages((prev) => [...prev.filter(m => !m.isCommand), { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: result.output || '(无输出)' }], isCommand: true }]);
       } catch (err: any) {
-        setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: `执行失败: ${err.message}` }] }]);
+        setMessages((prev) => [...prev.filter(m => !m.isCommand), { id: nextMsgId(), role: 'assistant' as const, parts: [{ type: 'text' as const, text: `执行失败: ${err.message}` }], isCommand: true, isError: true }]);
       }
       return;
     }
