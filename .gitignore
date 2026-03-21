@@ -8,6 +8,10 @@ limcode/
 
 .env
 
+# 运行时数据（本地配置和会话记录）
+data/configs/
+data/sessions/
+
 # 便携版 Node.js（启动脚本自动下载）
 node/
 node-download.zip
