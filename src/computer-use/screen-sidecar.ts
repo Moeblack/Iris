@@ -73,9 +73,13 @@ async function handleRequest(req: { id: number; method: string; params?: Record<
 
           const label = typeof targetWindow === 'string' ? targetWindow : JSON.stringify(targetWindow);
           log(`正在绑定目标窗口: ${label} ...`);
-          await adapter.bindWindow(targetWindow);
-          screenSize = await adapter.getScreenSize();
-          log(`窗口模式已启用，窗口尺寸: ${screenSize[0]}×${screenSize[1]}`);
+          try {
+            await adapter.bindWindow(targetWindow);
+            screenSize = await adapter.getScreenSize();
+            log(`窗口模式已启用，窗口尺寸: ${screenSize[0]}×${screenSize[1]}`);
+          } catch (e: any) {
+            log(`窗口绑定失败: ${e?.message ?? e}，已回退到全屏模式。可稍后用 /window 手动绑定。`);
+          }
         }
         log(`屏幕尺寸: ${screenSize[0]}×${screenSize[1]}`);
 
