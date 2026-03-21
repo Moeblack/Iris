@@ -202,11 +202,7 @@ async function runMultiAgent(): Promise<void> {
     await Promise.all(allNonConsolePlatforms.map(p => p.start()));
   }
 
-  // 3. Console Agent 选择循环
-  //    全局 AI 始终可选，所有已定义 agent 也可选
-  await runConsoleAgentLoop(agentDefs, bootstrapCache);
-
-  // 4. 退出清理
+  // 3. 注册退出清理（在 Console 循环之前，确保运行期间信号也能触发清理）
   let cleaning = false;
   const cleanup = async () => {
     if (cleaning) return;
@@ -224,6 +220,10 @@ async function runMultiAgent(): Promise<void> {
   };
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
+
+  // 4. Console Agent 选择循环
+  //    全局 AI 始终可选，所有已定义 agent 也可选
+  await runConsoleAgentLoop(agentDefs, bootstrapCache);
 }
 
 // ============ Console Agent 选择循环 ============
@@ -275,34 +275,39 @@ async function startConsoleForAgent(
 
   const { ConsolePlatform } = await import('./platforms/console');
 
-  return new Promise<'exit' | 'switch-agent'>(async (resolve) => {
-    const consolePlatform = new ConsolePlatform(backend, {
-      modeName: defaultMode,
-      modelName: currentModel.modelName,
-      modelId: currentModel.modelId,
-      contextWindow: currentModel.contextWindow,
-      configDir,
-      getMCPManager,
-      setMCPManager: (manager?: MCPManager) => { setMCPManager(manager); },
-      agentName,
-      onSwitchAgent: () => {
-        resolved = true;
-        consolePlatform.stop();
-        resolve('switch-agent');
-      },
-    });
-
-    let resolved = false;
-    const originalStop = consolePlatform.stop.bind(consolePlatform);
-    consolePlatform.stop = async () => {
-      await originalStop();
-      if (!resolved) {
-        resolved = true;
-        resolve('exit');
-      }
-    };
-    await consolePlatform.start();
+  let resolveAction: (action: 'exit' | 'switch-agent') => void;
+  const promise = new Promise<'exit' | 'switch-agent'>((resolve) => {
+    resolveAction = resolve;
   });
+
+  let resolved = false;
+  const consolePlatform = new ConsolePlatform(backend, {
+    modeName: defaultMode,
+    modelName: currentModel.modelName,
+    modelId: currentModel.modelId,
+    contextWindow: currentModel.contextWindow,
+    configDir,
+    getMCPManager,
+    setMCPManager: (manager?: MCPManager) => { setMCPManager(manager); },
+    agentName,
+    onSwitchAgent: () => {
+      resolved = true;
+      consolePlatform.stop();
+      resolveAction('switch-agent');
+    },
+  });
+
+  const originalStop = consolePlatform.stop.bind(consolePlatform);
+  consolePlatform.stop = async () => {
+    await originalStop();
+    if (!resolved) {
+      resolved = true;
+      resolveAction('exit');
+    }
+  };
+
+  await consolePlatform.start();
+  return promise;
 }
 
 // ============ 主入口 ============
