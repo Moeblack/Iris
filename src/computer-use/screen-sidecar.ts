@@ -52,6 +52,7 @@ async function handleRequest(req: { id: number; method: string; params?: Record<
 
       case 'initialize': {
         log('正在检测平台适配器...');
+        const warnings: string[] = [];
         adapter = getScreenAdapter() ?? null;
         if (!adapter) {
           throw new Error(`当前操作系统 (${process.platform}) 不支持 screen 环境`);
@@ -78,13 +79,15 @@ async function handleRequest(req: { id: number; method: string; params?: Record<
             screenSize = await adapter.getScreenSize();
             log(`窗口模式已启用，窗口尺寸: ${screenSize[0]}×${screenSize[1]}`);
           } catch (e: any) {
-            log(`窗口绑定失败: ${e?.message ?? e}，已回退到全屏模式。可稍后用 /window 手动绑定。`);
+            const msg = `窗口绑定失败: ${e?.message ?? e}，已回退到全屏模式。可用 /window 手动绑定。`;
+            log(msg);
+            warnings.push(msg);
           }
         }
         log(`屏幕尺寸: ${screenSize[0]}×${screenSize[1]}`);
 
         log('Screen 环境就绪');
-        result = { ok: true, screenSize };
+        result = { ok: true, screenSize, warnings };
         break;
       }
 
