@@ -12,6 +12,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1280,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -23,6 +24,23 @@ export default defineConfig({
 
           if (normalizedId.includes('/node_modules/highlight.js/')) {
             return 'vendor-highlight'
+          }
+
+          // mermaid 子依赖拆分为独立 chunk（必须在 mermaid 规则之前）
+          if (/\/node_modules\/d3(-[^/]+)?\//.test(normalizedId)) {
+            return 'vendor-d3'
+          }
+
+          if (/\/node_modules\/cytoscape(-[^/]+)?\//.test(normalizedId)) {
+            return 'vendor-cytoscape'
+          }
+
+          if (normalizedId.includes('/node_modules/@mermaid-js/')) {
+            return 'vendor-mermaid-parser'
+          }
+
+          if (normalizedId.includes('/node_modules/dagre-d3-es/') || normalizedId.includes('/node_modules/roughjs/') || normalizedId.includes('/node_modules/lodash-es/')) {
+            return 'vendor-mermaid-deps'
           }
 
           if (normalizedId.includes('/node_modules/mermaid/')) {

@@ -420,6 +420,55 @@
           <button class="btn-mcp-add" type="button" @click="addModeEntry">+ 新增模式</button>
         </section>
 
+        <!-- Plugins -->
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <div>
+              <h3>插件</h3>
+              <p>管理已安装的插件。插件可以扩展工具、模式和钩子。</p>
+            </div>
+            <span class="settings-pill">{{ pluginEntries.length }} 个插件</span>
+          </div>
+
+          <div v-for="(entry, idx) in pluginEntries" :key="entry.uid" class="tier-block">
+            <div class="tier-header" @click="entry.open = !entry.open">
+              <span class="tier-arrow" :class="{ open: entry.open }">▶</span>
+              <span class="tier-label">{{ entry.name || '未命名' }}</span>
+              <span class="tier-desc">{{ entry.type }}</span>
+              <label class="toggle-switch" @click.stop>
+                <input type="checkbox" v-model="entry.enabled" />
+                <span class="toggle-slider"></span>
+              </label>
+              <button class="btn-mcp-remove" type="button" @click.stop="removePluginEntry(idx)" title="删除插件">
+                <AppIcon :name="ICONS.common.close" />
+              </button>
+            </div>
+            <div v-show="entry.open" class="tier-body">
+              <div class="settings-grid two-columns">
+                <div class="form-group full-width">
+                  <label>插件名称</label>
+                  <input type="text" v-model="entry.name" placeholder="插件名称" />
+                  <p class="field-hint">本地插件对应 ~/.iris/plugins/ 下的目录名，npm 插件对应包名后缀（iris-plugin-xxx）。</p>
+                </div>
+                <div class="form-group">
+                  <label>类型</label>
+                  <select v-model="entry.type">
+                    <option value="local">本地 (local)</option>
+                    <option value="npm">npm</option>
+                  </select>
+                </div>
+                <div class="form-group full-width">
+                  <label>配置 (JSON)</label>
+                  <textarea v-model="entry.config" rows="4" placeholder='{"apiKey": "..."}' />
+                  <p class="field-hint">可选的插件配置参数，会覆盖插件自身的 config.yaml。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn-mcp-add" type="button" @click="addPluginEntry">+ 新增插件</button>
+        </section>
+
         <!-- Computer Use -->
         <section class="settings-section">
           <div class="settings-section-head">
@@ -1192,6 +1241,9 @@ const {
   modeEntries,
   addModeEntry,
   removeModeEntry,
+  pluginEntries,
+  addPluginEntry,
+  removePluginEntry,
   computerUse,
   platformConfig,
   contextWindowPlaceholder,

@@ -662,6 +662,79 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     return null
   }
 
+  // ============ Plugins ============
+
+  interface PluginEntry {
+    uid: number
+    open: boolean
+    name: string
+    type: 'local' | 'npm'
+    enabled: boolean
+    config: string
+  }
+
+  let nextPluginUid = 1
+
+  function createPluginEntry(data: Partial<PluginEntry> = {}): PluginEntry {
+    return {
+      uid: nextPluginUid++,
+      open: data.open ?? true,
+      name: data.name ?? '',
+      type: data.type ?? 'local',
+      enabled: data.enabled ?? true,
+      config: data.config ?? '',
+    }
+  }
+
+  const pluginEntries = reactive<PluginEntry[]>([])
+
+  function addPluginEntry() {
+    pluginEntries.push(createPluginEntry())
+  }
+
+  function removePluginEntry(index: number) {
+    pluginEntries.splice(index, 1)
+  }
+
+  function findDuplicatePluginNames(): string[] {
+    const seen = new Set<string>()
+    const duplicates = new Set<string>()
+    for (const entry of pluginEntries) {
+      const normalized = entry.name.trim()
+      if (!normalized) continue
+      if (seen.has(normalized)) { duplicates.add(normalized); continue }
+      seen.add(normalized)
+    }
+    return Array.from(duplicates)
+  }
+
+  function buildPluginsPayload(): any[] | null {
+    if (pluginEntries.length === 0) return null
+    const result: any[] = []
+    for (const entry of pluginEntries) {
+      const name = entry.name.trim()
+      if (!name) continue
+      const item: any = { name, type: entry.type, enabled: entry.enabled }
+      if (entry.config.trim()) {
+        try { item.config = JSON.parse(entry.config) } catch { /* ignore invalid JSON */ }
+      }
+      result.push(item)
+    }
+    return result.length > 0 ? result : null
+  }
+
+  function validatePluginEntries(): string | null {
+    if (pluginEntries.length === 0) return null
+    const names = new Set<string>()
+    for (const entry of pluginEntries) {
+      const name = entry.name.trim()
+      if (!name) return '插件名称不能为空'
+      if (names.has(name)) return `插件名称重复：${name}`
+      names.add(name)
+    }
+    return null
+  }
+
   // ============ Computer Use ============
   const computerUse = reactive({
     enabled: false,
@@ -1043,6 +1116,7 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       () => JSON.stringify(mcpServers, (key, value) => (key === 'open' || key === 'timeoutInput') ? undefined : value),
       () => JSON.stringify(subAgentEntries.map(e => ({ name: e.name, description: e.description, systemPrompt: e.systemPrompt, toolMode: e.toolMode, toolList: e.toolList, modelName: e.modelName, maxToolRounds: e.maxToolRounds, parallel: e.parallel }))),
       () => JSON.stringify(modeEntries.map(e => ({ name: e.name, description: e.description, systemPrompt: e.systemPrompt, toolMode: e.toolMode, toolList: e.toolList }))),
+      () => JSON.stringify(pluginEntries.map(e => ({ name: e.name, type: e.type, enabled: e.enabled, config: e.config }))),
       () => JSON.stringify(computerUse),
       () => JSON.stringify(platformConfig),
     ],
@@ -1164,6 +1238,20 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
           }))
         }
         modeOriginalNames.value = modeEntries.map(e => e.name)
+      }
+
+      // Plugins
+      if (Array.isArray(data.plugins)) {
+        for (const p of data.plugins) {
+          if (!p || typeof p !== 'object') continue
+          pluginEntries.push(createPluginEntry({
+            name: p.name || '',
+            type: p.type === 'npm' ? 'npm' : 'local',
+            enabled: p.enabled !== false,
+            config: p.config ? JSON.stringify(p.config, null, 2) : '',
+            open: false,
+          }))
+        }
       }
 
       // Computer Use
@@ -1417,6 +1505,22 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       return
     }
 
+    const pluginValidationError = validatePluginEntries()
+    if (pluginValidationError) {
+      statusText.value = '保存失败: ' + pluginValidationError
+      statusError.value = true
+      saving.value = false
+      return
+    }
+
+    const duplicatePluginNamesArr = findDuplicatePluginNames()
+    if (duplicatePluginNamesArr.length > 0) {
+      statusText.value = `保存失败: 插件名称重复（${duplicatePluginNamesArr.join('、')}）`
+      statusError.value = true
+      saving.value = false
+      return
+    }
+
     try {
       const { payload: llmPayload, currentNames: currentModelNames } = buildLLMPayload()
 
@@ -1439,6 +1543,10 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       }
       if (modesPayload !== null) {
         payload.modes = modesPayload
+      }
+      const pluginsPayload = buildPluginsPayload()
+      if (pluginsPayload !== null) {
+        payload.plugins = pluginsPayload
       }
       payload.computer_use = buildComputerUsePayload()
       payload.platform = buildPlatformPayload()
@@ -1888,6 +1996,9 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     modeEntries,
     addModeEntry,
     removeModeEntry,
+    pluginEntries,
+    addPluginEntry,
+    removePluginEntry,
     computerUse,
     platformConfig,
     contextWindowPlaceholder,

@@ -68,6 +68,18 @@ export function sanitizeConfig(data: any): any {
     result.cloudflare.apiToken = maskSensitive(String(result.cloudflare.apiToken));
   }
 
+  if (Array.isArray(result.plugins)) {
+    for (const p of result.plugins) {
+      if (p?.config && typeof p.config === 'object') {
+        for (const key of Object.keys(p.config)) {
+          if (/key|secret|token|password/i.test(key)) {
+            p.config[key] = maskSensitive(String(p.config[key] ?? ''));
+          }
+        }
+      }
+    }
+  }
+
   if (result.mcp?.servers && typeof result.mcp.servers === 'object') {
     for (const server of Object.values(result.mcp.servers) as any[]) {
       if (!server?.headers) continue;
