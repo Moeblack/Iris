@@ -1,6 +1,7 @@
 export interface MessageMeta {
   tokenIn?: number;
   tokenOut?: number;
+  createdAt?: number;
   durationMs?: number;
   streamOutputDurationMs?: number;
   modelName?: string;

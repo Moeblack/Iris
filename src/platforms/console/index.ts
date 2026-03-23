@@ -117,6 +117,7 @@ function getMessageMeta(content: Content): MessageMeta | undefined {
   const meta: MessageMeta = {};
   if (content.usageMetadata?.promptTokenCount != null) meta.tokenIn = content.usageMetadata.promptTokenCount;
   if (content.usageMetadata?.candidatesTokenCount != null) meta.tokenOut = content.usageMetadata.candidatesTokenCount;
+  if (content.createdAt != null) meta.createdAt = content.createdAt;
   if (content.durationMs != null) meta.durationMs = content.durationMs;
   if (content.streamOutputDurationMs != null) meta.streamOutputDurationMs = content.streamOutputDurationMs;
   if (content.modelName) (meta as any).modelName = content.modelName;
@@ -264,6 +265,12 @@ export class ConsolePlatform extends PlatformAdapter {
     this.backend.on('retry', (sid: string, attempt: number, maxRetries: number, error: string) => {
       if (sid === this.sessionId) {
         this.appHandle?.setRetryInfo({ attempt, maxRetries, error });
+      }
+    });
+
+    this.backend.on('user:token', (sid: string, tokenCount: number) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.setUserTokens(tokenCount);
       }
     });
 

@@ -86,6 +86,8 @@ export interface Content {
   streamOutputDurationMs?: number;
   /** 产生该消息的 AI 模型名称（例如：gemini-2.5-flash），用于历史回显 */
   modelName?: string;
+  /** 消息创建时间戳（毫秒），用户消息为发送时间，模型消息为首个流式块或非流响应到达时间 */
+  createdAt?: number;
 }
 
 // ============ 类型守卫工具函数 ============
