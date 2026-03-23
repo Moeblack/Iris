@@ -12,6 +12,7 @@
 - 会话存储：JSON 文件或 SQLite
 - 图片输入：支持 vision 模型直连，也支持 OCR 回退
 - 模式系统：支持自定义模式和系统提示词覆盖
+- 插件系统：支持 PreBootstrap 装配、自定义 Provider / 平台、钩子与完整内部 API
 - TUI 界面：基于 [OpenTUI](https://opentui.com/) + React，支持 Markdown 渲染、工具状态展示、撤销/恢复
 
 ## 快速开始

@@ -19,7 +19,7 @@ import { ToolStateManager } from './state';
 import { FunctionCallPart, FunctionResponsePart, InlineDataPart } from '../types';
 import { createLogger } from '../logger';
 import { ToolPolicyConfig, ToolsConfig } from '../config';
-import type { BeforeToolExecInterceptor } from '../plugins/types';
+import type { BeforeToolExecInterceptor, AfterToolExecInterceptor } from '../plugins/types';
 
 const logger = createLogger('ToolScheduler');
 
@@ -215,6 +215,7 @@ async function executeSingle(
   toolsConfig: ToolsConfig = { permissions: {} },
   signal?: AbortSignal,
   beforeToolExec?: BeforeToolExecInterceptor,
+  afterToolExec?: AfterToolExecInterceptor,
 ): Promise<FunctionResponsePart> {
   const toolName = call.functionCall.name;
 
@@ -307,15 +308,27 @@ async function executeSingle(
 
   const execStart = Date.now();
   try {
-    const result = await registry.execute(toolName, effectiveArgs);
+    let result = await registry.execute(toolName, effectiveArgs);
     const durationMs = Date.now() - execStart;
+
+    if (afterToolExec) {
+      try {
+        const interception = await afterToolExec(toolName, effectiveArgs, result, durationMs);
+        if (interception) {
+          result = interception.result;
+        }
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.warn(`插件 onAfterToolExec 执行失败，已忽略: ${toolName}: ${errorMsg}`);
+      }
+    }
 
     // 工具可通过约定字段 __response / __parts 返回带多模态内联数据的结果。
     // 适用于需要在工具结果中附带截图、音频等二进制数据的场景。
     //   __response → functionResponse.response（扁平，不包在 { result } 里）
     //   __parts    → functionResponse.parts（InlineDataPart 数组）
     const isRichResult = result != null && typeof result === 'object'
-      && !Array.isArray(result) && '__response' in (result as any);
+      && !Array.isArray(result) && '__response' in (result as Record<string, unknown>);
 
     let response: Record<string, unknown>;
     let responseParts: InlineDataPart[] | undefined;
@@ -323,7 +336,7 @@ async function executeSingle(
     if (isRichResult) {
       const rich = result as Record<string, unknown>;
       response = (rich.__response as Record<string, unknown>) ?? {};
-      responseParts = Array.isArray(rich.__parts) ? rich.__parts as any : undefined;
+      responseParts = Array.isArray(rich.__parts) ? rich.__parts as InlineDataPart[] : undefined;
     } else {
       response = { result } as Record<string, unknown>;
     }
@@ -379,6 +392,7 @@ export async function executePlan(
   toolsConfig: ToolsConfig = { permissions: {} },
   signal?: AbortSignal,
   beforeToolExec?: BeforeToolExecInterceptor,
+  afterToolExec?: AfterToolExecInterceptor,
 ): Promise<FunctionResponsePart[]> {
   const responseParts: FunctionResponsePart[] = new Array(calls.length);
 
@@ -409,7 +423,7 @@ export async function executePlan(
 
       const results = await Promise.all(
         batch.indices.map(i =>
-          executeSingle(calls[i], registry, toolState, invocationIds?.[i], toolsConfig, signal, beforeToolExec)
+          executeSingle(calls[i], registry, toolState, invocationIds?.[i], toolsConfig, signal, beforeToolExec, afterToolExec)
         ),
       );
       for (let j = 0; j < batch.indices.length; j++) {
@@ -417,7 +431,7 @@ export async function executePlan(
       }
     } else {
       for (const i of batch.indices) {
-        responseParts[i] = await executeSingle(calls[i], registry, toolState, invocationIds?.[i], toolsConfig, signal, beforeToolExec);
+        responseParts[i] = await executeSingle(calls[i], registry, toolState, invocationIds?.[i], toolsConfig, signal, beforeToolExec, afterToolExec);
       }
     }
   }

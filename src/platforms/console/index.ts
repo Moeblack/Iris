@@ -19,6 +19,7 @@ import { App, AppHandle, MessageMeta } from './App';
 import { MessagePart } from './components/MessageItem';
 import { ConsoleSettingsController, ConsoleSettingsSaveResult, ConsoleSettingsSnapshot } from './settings';
 import type { LLMModelInfo } from '../../llm/router';
+import type { BootstrapExtensionRegistry } from '../../bootstrap/extensions';
 
 function createToolInvocationFromFunctionCall(
   part: any,
@@ -156,6 +157,7 @@ export interface ConsolePlatformOptions {
   computerEnv?: Computer;
   /** 初始化过程中的警告信息（TUI 启动后展示） */
   initWarnings?: string[];
+  extensions?: Pick<BootstrapExtensionRegistry, 'llmProviders' | 'ocrProviders'>;
 }
 
 export class ConsolePlatform extends PlatformAdapter {
@@ -196,6 +198,7 @@ export class ConsolePlatform extends PlatformAdapter {
       configDir: options.configDir,
       getMCPManager: options.getMCPManager,
       setMCPManager: options.setMCPManager,
+      extensions: options.extensions,
     });
   }
 

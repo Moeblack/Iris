@@ -3,7 +3,7 @@
  */
 
 import type { OCRConfig } from '../config/ocr';
-import type { LLMProvider } from '../llm/providers/base';
+import type { LLMProviderLike } from '../llm/providers/base';
 import { createOpenAICompatibleProvider } from '../llm/providers/openai-compatible';
 import type { LLMRequest, Part, TextPart } from '../types';
 import { extractText, isTextPart } from '../types';
@@ -12,8 +12,12 @@ const OCR_TEXT_MARKER_RE = /^\[\[IRIS_OCR_IMAGE_(\d+)\]\]\n/;
 const OCR_PROMPT = '请详细描述图片内容，优先完整、准确地提取其中所有可见文字；若存在段落、表格、列表或表单，请尽量保持原有结构。若图片中没有文字，再简要描述主要视觉内容。';
 const OCR_EMPTY_TEXT = '（OCR 未提取到可识别内容）';
 
-export class OCRService {
-  private provider: LLMProvider;
+export interface OCRProvider {
+  extractText(mimeType: string, base64Data: string): Promise<string>;
+}
+
+export class OCRService implements OCRProvider {
+  private provider: LLMProviderLike;
 
   constructor(private config: OCRConfig) {
     this.provider = createOpenAICompatibleProvider({

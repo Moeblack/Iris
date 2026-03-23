@@ -22,7 +22,12 @@ import { ToolStateManager } from '../tools/state';
 import { buildExecutionPlan, executePlan } from '../tools/scheduler';
 import { ToolsConfig } from '../config';
 import { PromptAssembler } from '../prompt/assembler';
-import type { BeforeToolExecInterceptor } from '../plugins/types';
+import type {
+  BeforeToolExecInterceptor,
+  AfterToolExecInterceptor,
+  BeforeLLMCallInterceptor,
+  AfterLLMCallInterceptor,
+} from '../plugins/types';
 import { createLogger } from '../logger';
 import {
   Content, Part, LLMRequest, extractText, isFunctionCallPart,
@@ -46,6 +51,12 @@ export interface ToolLoopConfig {
   maxRetries?: number;
   /** 插件工具执行前拦截器（由 Backend 从插件钩子组合生成） */
   beforeToolExec?: BeforeToolExecInterceptor;
+  /** 插件工具执行后拦截器（由 Backend 从插件钩子组合生成） */
+  afterToolExec?: AfterToolExecInterceptor;
+  /** 插件 LLM 请求前拦截器（由 Backend 从插件钩子组合生成） */
+  beforeLLMCall?: BeforeLLMCallInterceptor;
+  /** 插件 LLM 响应后拦截器（由 Backend 从插件钩子组合生成） */
+  afterLLMCall?: AfterLLMCallInterceptor;
 }
 
 /** ToolLoop 执行结果 */
@@ -66,6 +77,8 @@ export interface ToolLoopRunOptions {
   extraParts?: Part[];
   /** 新消息追加到历史时的回调（用于实时持久化） */
   onMessageAppend?: (content: Content) => Promise<void>;
+  /** 一轮模型输出完成后的回调（在插件 afterLLMCall 之后、写入历史之前） */
+  onModelContent?: (content: Content, round: number) => Promise<void> | void;
   /** 固定使用的模型名称；不填时由调用方自行决定默认模型 */
   modelName?: string;
   /** 中止信号：触发后安全退出循环并清理历史 */
@@ -111,9 +124,21 @@ export class ToolLoop {
       // toolsConfig 仅控制执行策略（autoApprove/deny），不过滤工具声明。
       // 所有已注册工具的声明均传给 LLM，未配置 policy 的工具执行时默认需审批。
       const declarations = this.tools.getDeclarations();
-      const request = this.prompt.assemble(
+      let request = this.prompt.assemble(
         history, declarations, undefined, options?.extraParts,
       );
+
+      // 插件钩子：LLM 请求前拦截
+      if (this.config.beforeLLMCall) {
+        try {
+          const interception = await this.config.beforeLLMCall(request, rounds);
+          if (interception) {
+            request = interception.request;
+          }
+        } catch (err) {
+          logger.warn(`beforeLLMCall 执行失败 (round=${rounds}):`, err);
+        }
+      }
 
       // 调用 LLM（具体方式由 callLLM 决定）
       let modelContent: Content;
@@ -131,6 +156,24 @@ export class ToolLoop {
         // modelContent 已产生但我们被 abort 了，不追加到历史
         return await this.buildAbortResult(history, historyBaseLength, options?.onMessageAppend);
       }
+
+      // 插件钩子：LLM 响应后拦截
+      if (this.config.afterLLMCall) {
+        try {
+          const interception = await this.config.afterLLMCall(modelContent, rounds);
+          if (interception) {
+            modelContent = interception.content;
+          }
+        } catch (err) {
+          logger.warn(`afterLLMCall 执行失败 (round=${rounds}):`, err);
+        }
+      }
+
+      if (signal?.aborted) {
+        return await this.buildAbortResult(history, historyBaseLength, options?.onMessageAppend);
+      }
+
+      await options?.onModelContent?.(modelContent, rounds);
 
       history.push(modelContent);
       await options?.onMessageAppend?.(modelContent);
@@ -201,7 +244,6 @@ export class ToolLoop {
     throw lastError!;
   }
 
-
   /**
    * 构建 abort 结果：清理历史中不完整的消息，补全中断响应，保证格式合法。
    *
@@ -253,10 +295,30 @@ export class ToolLoop {
           'queued',
         ),
       );
-      return executePlan(calls, plan, this.tools, this.toolState, invocations.map(i => i.id), this.config.toolsConfig, signal, this.config.beforeToolExec);
+      return executePlan(
+        calls,
+        plan,
+        this.tools,
+        this.toolState,
+        invocations.map(i => i.id),
+        this.config.toolsConfig,
+        signal,
+        this.config.beforeToolExec,
+        this.config.afterToolExec,
+      );
     }
 
     // 无状态管理：纯执行
-    return executePlan(calls, plan, this.tools, undefined, undefined, this.config.toolsConfig, signal, this.config.beforeToolExec);
+    return executePlan(
+      calls,
+      plan,
+      this.tools,
+      undefined,
+      undefined,
+      this.config.toolsConfig,
+      signal,
+      this.config.beforeToolExec,
+      this.config.afterToolExec,
+    );
   }
 }

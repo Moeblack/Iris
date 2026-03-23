@@ -24,7 +24,8 @@ import { ToolStateManager } from '../tools/state';
 import { PromptAssembler } from '../prompt/assembler';
 import { MemoryProvider } from '../memory/base';
 import { ModeRegistry, ModeDefinition, applyToolFilter } from '../modes';
-import { OCRService, createOCRTextPart, isOCRTextPart, stripOCRTextMarker } from '../ocr';
+import type { OCRProvider } from '../ocr';
+import { createOCRTextPart, isOCRTextPart, stripOCRTextMarker } from '../ocr';
 import { ToolLoop, ToolLoopConfig, LLMCaller } from './tool-loop';
 import { createLogger } from '../logger';
 import { COMPUTER_USE_FUNCTION_NAMES } from '../computer-use/tools';
@@ -175,7 +176,7 @@ export interface BackendConfig {
   /** 当前活动模型配置（用于 vision 能力判定） */
   currentLLMConfig?: LLMConfig;
   /** OCR 服务（当主模型不支持 vision 时回退使用） */
-  ocrService?: OCRService;
+  ocrService?: OCRProvider;
   /** Computer Use 截图保留的最近轮次数（默认 3） */
   maxRecentScreenshots?: number;
   /** 用于 /compact 上下文压缩的模型名称（需在 LLMRouter 中已注册） */
@@ -225,7 +226,7 @@ export class Backend extends EventEmitter {
   private modeRegistry?: ModeRegistry;
   private defaultMode?: string;
   private currentLLMConfig?: LLMConfig;
-  private ocrService?: OCRService;
+  private ocrService?: OCRProvider;
   private maxRecentScreenshots: number;
   private summaryModelName?: string;
   private summaryConfig?: SummaryConfig;
@@ -295,12 +296,17 @@ export class Backend extends EventEmitter {
   setPluginHooks(hooks: PluginHook[]): void {
     this.pluginHooks = hooks;
 
+    this.toolLoopConfig.beforeToolExec = undefined;
+    this.toolLoopConfig.afterToolExec = undefined;
+    this.toolLoopConfig.beforeLLMCall = undefined;
+    this.toolLoopConfig.afterLLMCall = undefined;
+
     // 将 onBeforeToolExec 钩子组合为拦截器，注入到工具循环配置
-    const execHooks = hooks.filter(h => h.onBeforeToolExec);
-    if (execHooks.length > 0) {
+    const beforeToolExecHooks = hooks.filter(h => h.onBeforeToolExec);
+    if (beforeToolExecHooks.length > 0) {
       this.toolLoopConfig.beforeToolExec = async (toolName, args) => {
         let currentArgs = args;
-        for (const hook of execHooks) {
+        for (const hook of beforeToolExecHooks) {
           try {
             const result = await hook.onBeforeToolExec!({ toolName, args: currentArgs });
             if (result) {
@@ -313,6 +319,66 @@ export class Backend extends EventEmitter {
         }
         if (currentArgs !== args) return { blocked: false as const, args: currentArgs };
         return undefined;
+      };
+    }
+
+    const afterToolExecHooks = hooks.filter(h => h.onAfterToolExec);
+    if (afterToolExecHooks.length > 0) {
+      this.toolLoopConfig.afterToolExec = async (toolName, args, result, durationMs) => {
+        let currentResult = result;
+        let changed = false;
+        for (const hook of afterToolExecHooks) {
+          try {
+            const hookResult = await hook.onAfterToolExec!({ toolName, args, result: currentResult, durationMs });
+            if (hookResult) {
+              currentResult = hookResult.result;
+              changed = true;
+            }
+          } catch (err) {
+            logger.warn(`插件钩子 "${hook.name}" onAfterToolExec 执行失败:`, err);
+          }
+        }
+        return changed ? { result: currentResult } : undefined;
+      };
+    }
+
+    const beforeLLMCallHooks = hooks.filter(h => h.onBeforeLLMCall);
+    if (beforeLLMCallHooks.length > 0) {
+      this.toolLoopConfig.beforeLLMCall = async (request, round) => {
+        let currentRequest = request;
+        let changed = false;
+        for (const hook of beforeLLMCallHooks) {
+          try {
+            const hookResult = await hook.onBeforeLLMCall!({ request: currentRequest, round });
+            if (hookResult) {
+              currentRequest = hookResult.request;
+              changed = true;
+            }
+          } catch (err) {
+            logger.warn(`插件钩子 "${hook.name}" onBeforeLLMCall 执行失败:`, err);
+          }
+        }
+        return changed ? { request: currentRequest } : undefined;
+      };
+    }
+
+    const afterLLMCallHooks = hooks.filter(h => h.onAfterLLMCall);
+    if (afterLLMCallHooks.length > 0) {
+      this.toolLoopConfig.afterLLMCall = async (content, round) => {
+        let currentContent = content;
+        let changed = false;
+        for (const hook of afterLLMCallHooks) {
+          try {
+            const hookResult = await hook.onAfterLLMCall!({ content: currentContent, round });
+            if (hookResult) {
+              currentContent = hookResult.content;
+              changed = true;
+            }
+          } catch (err) {
+            logger.warn(`插件钩子 "${hook.name}" onAfterLLMCall 执行失败:`, err);
+          }
+        }
+        return changed ? { content: currentContent } : undefined;
       };
     }
   }
@@ -373,6 +439,15 @@ export class Backend extends EventEmitter {
   async clearSession(sessionId: string): Promise<void> {
     await this.storage.clearHistory(sessionId);
     this.clearRedo(sessionId);
+    this.lastSessionTokens.delete(sessionId);
+
+    for (const hook of this.pluginHooks) {
+      try {
+        await hook.onSessionClear?.({ sessionId });
+      } catch (err) {
+        logger.warn(`插件钩子 "${hook.name}" onSessionClear 执行失败:`, err);
+      }
+    }
   }
 
   /** 获取指定会话的历史消息 */
@@ -710,7 +785,7 @@ export class Backend extends EventEmitter {
     toolsConfig?: ToolsConfig;
     systemPrompt?: string;
     currentLLMConfig?: LLMConfig;
-    ocrService?: OCRService;
+    ocrService?: OCRProvider;
     maxRecentScreenshots?: number;
   }): void {
     if (opts.stream !== undefined) this.stream = opts.stream;
@@ -859,7 +934,6 @@ export class Backend extends EventEmitter {
           if (response.usageMetadata.totalTokenCount) lastCallTotalTokens = response.usageMetadata.totalTokenCount;
         }
       }
-      this.emit('assistant:content', sessionId, content);
       return content;
     };
 
@@ -887,6 +961,13 @@ export class Backend extends EventEmitter {
     });
     if (isNewSession) {
       await this.updateSessionMeta(sessionId, storedUserParts, true);
+      for (const hook of this.pluginHooks) {
+        try {
+          await hook.onSessionCreate?.({ sessionId });
+        } catch (err) {
+          logger.warn(`插件钩子 "${hook.name}" onSessionCreate 执行失败:`, err);
+        }
+      }
     }
     // 通知前端用户消息的估算 token 数
     if (estimatedUserTokens > 0) this.emit('user:token', sessionId, estimatedUserTokens);
@@ -897,6 +978,7 @@ export class Backend extends EventEmitter {
     const result = await loop.run(history, callLLM, {
       extraParts,
       onMessageAppend: (content) => this.storage.addMessage(sessionId, content),
+      onModelContent: (content) => { this.emit('assistant:content', sessionId, content); },
       signal,
       onRetry: (attempt, maxRetries, error) => {
         this.emit('retry', sessionId, attempt, maxRetries, error);

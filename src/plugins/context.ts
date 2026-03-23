@@ -11,6 +11,7 @@ import type { AppConfig } from '../config/types';
 import type { ToolRegistry } from '../tools/registry';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
+import type { LLMRouter } from '../llm/router';
 import type { PluginContext, PluginHook, PluginLogger, ToolWrapper, IrisAPI } from './types';
 import { createLogger } from '../logger';
 
@@ -22,6 +23,7 @@ export class PluginContextImpl implements PluginContext {
     private pluginName: string,
     private toolRegistry: ToolRegistry,
     private modeRegistry: ModeRegistry,
+    private router: LLMRouter,
     private appConfig: AppConfig,
     private promptAssembler: PromptAssembler,
     private pluginConfig?: Record<string, unknown>,
@@ -57,6 +59,10 @@ export class PluginContextImpl implements PluginContext {
 
   getModeRegistry(): ModeRegistry {
     return this.modeRegistry;
+  }
+
+  getRouter(): LLMRouter {
+    return this.router;
   }
 
   // ---- 工具拦截 ----

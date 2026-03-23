@@ -15,10 +15,9 @@ import type { AgentPaths } from './paths';
 import { logsDir as globalLogsDir } from './paths';
 import { createLLMRouter } from './llm/factory';
 import { LLMRouter } from './llm/router';
-import { JsonFileStorage } from './storage/json-file';
 import type { MemoryProvider } from './memory';
 import { createMCPManager, MCPManager } from './mcp';
-import { OCRService } from './ocr';
+import type { OCRProvider } from './ocr';
 import { ToolRegistry } from './tools/registry';
 import { ToolStateManager } from './tools/state';
 import { setToolLimits } from './tools/tool-limits';
@@ -41,6 +40,8 @@ import { DEFAULT_SYSTEM_PROMPT } from './prompt/templates/default';
 import { Backend } from './core/backend';
 import type { StorageProvider } from './storage/base';
 import { PluginManager } from './plugins';
+import { createBootstrapExtensionRegistry, type BootstrapExtensionRegistry } from './bootstrap/extensions';
+import type { PlatformRegistry } from './platforms/registry';
 
 export interface BootstrapResult {
   backend: Backend;
@@ -60,6 +61,10 @@ export interface BootstrapResult {
   initWarnings: string[];
   /** 插件管理器（未配置插件时为 undefined） */
   pluginManager: PluginManager | undefined;
+  /** Bootstrap 扩展注册表（供运行时热重载与平台创建复用） */
+  extensions: BootstrapExtensionRegistry;
+  /** 平台注册表（内置 + 插件注册） */
+  platformRegistry: PlatformRegistry;
 }
 
 /** Bootstrap 选项（多 Agent 模式传入） */
@@ -76,11 +81,20 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
 
   const configDir = findConfigFile(agentPaths?.configDir);
   const config = loadConfig(agentPaths?.configDir, agentPaths);
+  const extensions = createBootstrapExtensionRegistry();
 
-  // ---- 0. 创建 LLM 路由器 ----
-  const router = createLLMRouter(config.llm);
+  // ---- 0. 预加载插件 + PreBootstrap 阶段 ----
+  let pluginManager: PluginManager | undefined;
+  if (config.plugins?.length) {
+    pluginManager = new PluginManager();
+    await pluginManager.prepareAll(config.plugins, config);
+    await pluginManager.runPreBootstrap(config, extensions);
+  }
 
-  // ---- 0.5 配置请求日志（每个 Provider 实例独立，避免多 Agent 间互相覆盖） ----
+  // ---- 1. 创建 LLM 路由器 ----
+  const router = createLLMRouter(config.llm, undefined, extensions.llmProviders);
+
+  // ---- 1.5 配置请求日志（每个 Provider 实例独立，避免多 Agent 间互相覆盖） ----
   if (config.system.logRequests) {
     const effectiveLogsDir = agentPaths?.logsDir || globalLogsDir;
     for (const model of router.listModels()) {
@@ -89,28 +103,32 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
   }
 
   // ---- 2. 创建存储 ----
-  let storage: StorageProvider;
-  switch (config.storage.type) {
-    case 'sqlite': {
-      const { SqliteStorage } = await import('./storage/sqlite');
-      storage = new SqliteStorage(config.storage.dbPath);
-      break;
-    }
-    case 'json-file':
-    default:
-      storage = new JsonFileStorage(config.storage.dir);
-      break;
+  const storageFactory = extensions.storageProviders.get(config.storage.type);
+  if (!storageFactory) {
+    throw new Error(`未注册的存储类型: ${config.storage.type}`);
   }
+  const storage = await storageFactory(config.storage) as StorageProvider;
 
   // ---- 2.5 创建记忆模块 ----
   let memory: MemoryProvider | undefined;
   if (config.memory?.enabled) {
-    const { createMemoryProvider } = await import('./memory');
-    memory = createMemoryProvider({ dbPath: config.memory.dbPath });
+    const memoryType = config.memory.type ?? 'sqlite';
+    const memoryFactory = extensions.memoryProviders.get(memoryType);
+    if (!memoryFactory) {
+      throw new Error(`未注册的记忆类型: ${memoryType}`);
+    }
+    memory = await memoryFactory(config.memory) as MemoryProvider;
   }
 
   // ---- 2.6 创建 OCR 服务 ----
-  const ocrService = config.ocr ? new OCRService(config.ocr) : undefined;
+  let ocrService: OCRProvider | undefined;
+  if (config.ocr) {
+    const ocrFactory = extensions.ocrProviders.get(config.ocr.provider);
+    if (!ocrFactory) {
+      throw new Error(`未注册的 OCR provider: ${config.ocr.provider}`);
+    }
+    ocrService = await ocrFactory(config.ocr) as OCRProvider;
+  }
 
   // ---- 3. 注册工具 ----
   const tools = new ToolRegistry();
@@ -159,8 +177,8 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
       await cuEnv.initialize();
 
       // 收集初始化警告（如窗口绑定失败）
-      if ('initWarnings' in cuEnv && Array.isArray((cuEnv as any).initWarnings)) {
-        initWarnings.push(...(cuEnv as any).initWarnings);
+      if ('initWarnings' in cuEnv && Array.isArray((cuEnv as { initWarnings?: string[] }).initWarnings)) {
+        initWarnings.push(...(((cuEnv as { initWarnings?: string[] }).initWarnings) ?? []));
       }
 
       // 用户配置的工具策略（按环境键名取对应分组）
@@ -186,7 +204,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     }
   }
 
-  // ---- 3.5 注册用户自定义模式 ----
+  // ---- 3.6 注册用户自定义模式 ----
   const modeRegistry = new ModeRegistry();
   modeRegistry.register(DEFAULT_MODE);
   if (config.modes) {
@@ -194,20 +212,17 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
   }
   const defaultMode = config.system.defaultMode ?? DEFAULT_MODE_NAME;
 
-  // ---- 3.5a. 创建工具状态管理器 ----
+  // ---- 3.7 创建工具状态管理器 ----
   const toolState = new ToolStateManager();
 
-  // ---- 3.5b. 配置提示词（提前创建，供插件操作 systemParts） ----
+  // ---- 3.8 配置提示词（提前创建，供插件操作 systemParts） ----
   const prompt = new PromptAssembler();
   prompt.setSystemPrompt(config.system.systemPrompt || DEFAULT_SYSTEM_PROMPT);
 
-  // ---- 3.6 加载插件（插件可通过 ctx 访问 tools/modes/prompt） ----
-  let pluginManager: PluginManager | undefined;
-  if (config.plugins?.length) {
-    pluginManager = new PluginManager();
-    await pluginManager.loadAll(
-      config.plugins,
-      { tools, modes: modeRegistry, prompt },
+  // ---- 3.9 激活插件（插件可通过 ctx 访问 tools/modes/prompt/router） ----
+  if (pluginManager) {
+    await pluginManager.activateAll(
+      { tools, modes: modeRegistry, prompt, router },
       config,
     );
   }
@@ -263,6 +278,11 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
       tools,
       modes: modeRegistry,
       prompt,
+      config,
+      mcpManager,
+      computerEnv,
+      ocrService,
+      extensions,
     });
   }
 
@@ -279,5 +299,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     computerEnv,
     initWarnings,
     pluginManager,
+    extensions,
+    platformRegistry: extensions.platforms,
   };
 }
