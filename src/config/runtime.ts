@@ -12,11 +12,14 @@ import { parseMCPConfig } from './mcp';
 import { DEFAULT_SYSTEM_PROMPT } from '../prompt/templates/default';
 import { createMCPManager, MCPManager } from '../mcp';
 import { ToolRegistry } from '../tools/registry';
+import type { Computer } from '../computer-use/types';
 
 export interface RuntimeConfigReloadContext {
   backend: Backend;
   getMCPManager(): MCPManager | undefined;
   setMCPManager(manager?: MCPManager): void;
+  getComputerEnv?(): Computer | undefined;
+  setComputerEnv?(env?: Computer): void;
 }
 
 export interface RuntimeConfigSummary {
@@ -80,6 +83,11 @@ export async function applyRuntimeConfigReload(
     context.setMCPManager(nextMcpManager);
   }
 
+  // ---- Computer Use 热重载 ----
+  if (context.getComputerEnv && context.setComputerEnv) {
+    await reloadComputerUse(context, tools, mergedConfig);
+  }
+
   return {
     modelName: currentModel.modelName,
     modelId: currentModel.modelId,
@@ -87,4 +95,65 @@ export async function applyRuntimeConfigReload(
     streamEnabled: mergedConfig.system?.stream ?? context.backend.isStreamEnabled(),
     contextWindow: currentModel.contextWindow,
   };
+}
+
+async function reloadComputerUse(
+  context: RuntimeConfigReloadContext,
+  tools: ToolRegistry,
+  mergedConfig: any,
+): Promise<void> {
+  const { COMPUTER_USE_FUNCTION_NAMES, BrowserEnvironment, ScreenEnvironment, createComputerUseTools, resolveEnvironmentKey } = await import('../computer-use');
+
+  // 注销旧的 Computer Use 工具
+  for (const name of tools.listTools()) {
+    if (COMPUTER_USE_FUNCTION_NAMES.has(name)) {
+      tools.unregister(name);
+    }
+  }
+
+  // 销毁旧环境
+  const oldEnv = context.getComputerEnv!();
+  if (oldEnv) {
+    try { await oldEnv.dispose(); } catch { /* sidecar 可能已退出 */ }
+    context.setComputerEnv!(undefined);
+  }
+
+  // 如果新配置启用了 computer_use，重新初始化
+  const cuConfig = mergedConfig.computer_use;
+  if (cuConfig?.enabled) {
+    try {
+      const { parseComputerUseConfig } = await import('./computer-use');
+      const parsedConfig = parseComputerUseConfig(cuConfig);
+      if (parsedConfig) {
+        const env = parsedConfig.environment ?? 'browser';
+        const envKey = resolveEnvironmentKey(env, parsedConfig.backgroundMode);
+        let cuEnv: Computer;
+
+        if (env === 'screen') {
+          cuEnv = new ScreenEnvironment({
+            searchEngineUrl: parsedConfig.searchEngineUrl,
+            targetWindow: parsedConfig.targetWindow,
+            backgroundMode: parsedConfig.backgroundMode,
+          });
+        } else {
+          cuEnv = new BrowserEnvironment({
+            screenWidth: parsedConfig.screenWidth ?? 1440,
+            screenHeight: parsedConfig.screenHeight ?? 900,
+            headless: parsedConfig.headless,
+            initialUrl: parsedConfig.initialUrl,
+            searchEngineUrl: parsedConfig.searchEngineUrl,
+            highlightMouse: parsedConfig.highlightMouse,
+          });
+        }
+
+        await cuEnv.initialize();
+
+        const userPolicy = parsedConfig.environmentTools?.[envKey as keyof typeof parsedConfig.environmentTools];
+        tools.registerAll(createComputerUseTools(cuEnv, envKey, userPolicy));
+        context.setComputerEnv!(cuEnv);
+      }
+    } catch (err) {
+      console.error('[Iris] Computer Use 热重载失败:', err);
+    }
+  }
 }

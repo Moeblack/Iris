@@ -55,6 +55,8 @@ export interface AgentContext {
   /** MCP 管理器 getter（延迟求值，热重载后自动获取最新引用） */
   getMCPManager: () => MCPManager | undefined;
   setMCPManager: (mgr?: MCPManager) => void;
+  getComputerEnv?: () => import('../../computer-use/types').Computer | undefined;
+  setComputerEnv?: (env?: import('../../computer-use/types').Computer) => void;
 }
 
 /** MIME 类型映射 */
@@ -116,6 +118,9 @@ export class WebPlatform extends PlatformAdapter {
   /** Agent 热重载回调：给定 agent 定义，返回 bootstrap 结果 */
   private reloadHandler?: (agent: AgentDefinition | '__default__') => Promise<BootstrapResult>;
 
+  /** 平台配置热重载回调 */
+  private platformReloadHandler?: (mergedConfig: any) => Promise<void>;
+
   /** 记录当前是否处于多 agent 模式（用于 reload 时判断模式切换） */
   private multiAgentMode = false;
 
@@ -137,6 +142,19 @@ export class WebPlatform extends PlatformAdapter {
     this.setupRoutes();
     this.deployToken = crypto.randomBytes(16).toString('hex');
     this.terminalHandler = createTerminalHandler();
+  }
+
+  /** 为指定 agent（默认为 default）设置 Computer Use 环境的 getter/setter */
+  setComputerEnvHandlers(
+    getEnv: () => import('../../computer-use/types').Computer | undefined,
+    setEnv: (env?: import('../../computer-use/types').Computer) => void,
+    agentName = 'default',
+  ): void {
+    const agent = this.agents.get(agentName) ?? this.agents.get(this.defaultAgentName);
+    if (agent) {
+      agent.getComputerEnv = getEnv;
+      agent.setComputerEnv = setEnv;
+    }
   }
 
   /** 添加 Agent（多 Agent 模式使用）。首次调用时移除构造函数创建的 'default' 占位 */
@@ -165,8 +183,13 @@ export class WebPlatform extends PlatformAdapter {
     this.reloadHandler = handler;
   }
 
+  /** 注入平台配置热重载回调 */
+  setPlatformReloadHandler(handler: (mergedConfig: any) => Promise<void>): void {
+    this.platformReloadHandler = handler;
+  }
+
   /**
-   * 热重载 Agent 列表：重新读取 agents.yaml，对比运行中的 agents，
+   * 热重载 Agent ��表：重新读取 agents.yaml，对比运行中的 agents，
    * 新增/删除 agent 而不影响未变更的 agent。
    */
   async reloadAgents(): Promise<{ added: string[]; removed: string[]; kept: string[]; message: string }> {
@@ -694,12 +717,19 @@ export class WebPlatform extends PlatformAdapter {
             backend: agent.backend,
             getMCPManager: agent.getMCPManager,
             setMCPManager: agent.setMCPManager,
+            getComputerEnv: agent.getComputerEnv,
+            setComputerEnv: agent.setComputerEnv,
           },
           mergedConfig,
         );
         agent.config.provider = summary.provider;
         agent.config.modelId = summary.modelId;
         agent.config.streamEnabled = summary.streamEnabled;
+
+        // 平台配置热重载
+        if (this.platformReloadHandler && mergedConfig.platform) {
+          await this.platformReloadHandler(mergedConfig);
+        }
       });
       return configHandlers.update(req, res);
     });
