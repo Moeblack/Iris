@@ -25,6 +25,7 @@ import { createLogger } from '../../logger';
 import { MCPManager } from '../../mcp';
 import { assertManagementToken } from './security/management';
 import { applyRuntimeConfigReload } from '../../config/runtime';
+import { projectRoot, dataDir, configDir, isCompiledBinary } from '../../paths';
 import { Content, Part, isThoughtTextPart } from '../../types';
 import { formatContent, formatMessages } from './message-format';
 
@@ -519,6 +520,14 @@ export class WebPlatform extends PlatformAdapter {
         managementProtected: !!this.config.managementToken,
         platform: 'web',
         contextWindow: modelInfo.contextWindow,
+        mcpStatus: agent.getMCPManager()?.getServerInfo() ?? [],
+        runtime: {
+          projectRoot,
+          dataDir,
+          configDir,
+          isCompiledBinary,
+          configSource: fs.existsSync(path.join(projectRoot, 'data/configs.example')) ? 'template' : 'embedded',
+        },
       });
     });
 

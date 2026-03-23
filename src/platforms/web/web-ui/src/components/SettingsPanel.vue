@@ -317,6 +317,7 @@
               <span class="tier-arrow" :class="{ open: server.open }"></span>
               <span class="tier-label">{{ server.name || '未命名' }}</span>
               <span class="tier-desc">{{ transportLabel(server.transport) }}</span>
+              <span class="mcp-status-tag" :style="{ color: mcpStatusLabel(server).color }">{{ mcpStatusLabel(server).text }}</span>
               <label class="toggle-switch tier-toggle" @click.stop>
                 <input type="checkbox" v-model="server.enabled" />
                 <span class="toggle-switch-ui"></span>
@@ -933,6 +934,39 @@
           </template>
         </section>
 
+        <!-- 运行环境 -->
+        <section v-if="!editingAgent && runtimeInfo" class="settings-section">
+          <div class="settings-section-head">
+            <div>
+              <h3>运行环境</h3>
+              <p>当前 Iris 实例的运行时信息。</p>
+            </div>
+            <span class="settings-pill">{{ runtimeInfo.isCompiledBinary ? '编译版' : '开发模式' }}</span>
+          </div>
+          <div class="runtime-info-grid">
+            <div class="runtime-info-item">
+              <span class="runtime-info-label">运行模式</span>
+              <span class="runtime-info-value">{{ runtimeInfo.isCompiledBinary ? '编译后二进制' : '源码开发模式' }}</span>
+            </div>
+            <div class="runtime-info-item">
+              <span class="runtime-info-label">项目根目录</span>
+              <span class="runtime-info-value mono">{{ runtimeInfo.projectRoot }}</span>
+            </div>
+            <div class="runtime-info-item">
+              <span class="runtime-info-label">数据目录</span>
+              <span class="runtime-info-value mono">{{ runtimeInfo.dataDir }}</span>
+            </div>
+            <div class="runtime-info-item">
+              <span class="runtime-info-label">配置目录</span>
+              <span class="runtime-info-value mono">{{ runtimeInfo.configDir }}</span>
+            </div>
+            <div class="runtime-info-item">
+              <span class="runtime-info-label">配置来源</span>
+              <span class="runtime-info-value">{{ runtimeInfo.configSource === 'template' ? '模板文件' : '内嵌默认配置' }}</span>
+            </div>
+          </div>
+        </section>
+
         <!-- 危险区域 -->
         <section v-if="!editingAgent" class="settings-section settings-danger-zone">
           <div class="settings-section-head">
@@ -1264,11 +1298,13 @@ const {
   statusError,
   saving,
   mcpServers,
+  mcpStatusLabel,
   addMcpServer,
   removeMcpServer,
   syncMcpTimeoutInput,
   handleMcpTimeoutInput,
   sanitizeMcpName,
+  runtimeInfo,
   subAgentEntries,
   subAgentModelOptions,
   addSubAgentEntry,

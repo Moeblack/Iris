@@ -74,6 +74,26 @@ export interface SessionSummary {
   updatedAt?: string
 }
 
+/** MCP 客户端连接状态 */
+export type MCPClientStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+
+/** MCP 服务器运行时信息 */
+export interface MCPServerInfo {
+  name: string
+  status: MCPClientStatus
+  toolCount: number
+  error?: string
+}
+
+/** 运行环境信息 */
+export interface RuntimeInfo {
+  projectRoot: string
+  dataDir: string
+  configDir: string
+  isCompiledBinary: boolean
+  configSource: 'template' | 'embedded'
+}
+
 /** 系统状态 */
 export interface StatusInfo {
   provider: string
@@ -85,6 +105,8 @@ export interface StatusInfo {
   managementProtected?: boolean
   platform: string
   contextWindow?: number
+  mcpStatus?: MCPServerInfo[]
+  runtime?: RuntimeInfo
 }
 
 // ============ 工具审批 ============

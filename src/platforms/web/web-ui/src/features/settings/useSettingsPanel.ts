@@ -13,7 +13,7 @@ import {
   cfGetSsl,
   cfSetSsl,
 } from '../../api/client'
-import type { CfDnsRecord, ConfigModelOption, CloudflareSslMode } from '../../api/types'
+import type { CfDnsRecord, ConfigModelOption, CloudflareSslMode, MCPServerInfo, RuntimeInfo } from '../../api/types'
 import { useTheme, type ThemeMode } from '../../composables/useTheme'
 import { loadManagementToken, subscribeManagementTokenChange } from '../../utils/managementToken'
 import { loadAuthToken, subscribeAuthTokenChange } from '../../utils/authToken'
@@ -888,6 +888,19 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
   const mcpServers = reactive<MCPServerEntry[]>([])
   /** 加载时记录的原始服务器名，用于保存时识别被删除的服务器 */
   const mcpOriginalNames = ref<string[]>([])
+  /** MCP 服务器运行时状态 */
+  const mcpStatus = ref<MCPServerInfo[]>([])
+  /** 运行环境信息 */
+  const runtimeInfo = ref<RuntimeInfo | null>(null)
+
+  function mcpStatusLabel(server: MCPServerEntry): { text: string; color: string } {
+    if (!server.enabled) return { text: '已禁用', color: 'var(--text-muted)' }
+    const info = mcpStatus.value.find(s => s.name === server.name)
+    if (!info) return { text: '未应用', color: 'var(--text-tertiary)' }
+    if (info.status === 'connected') return { text: `已连接 · ${info.toolCount} 工具`, color: 'var(--success)' }
+    if (info.error) return { text: info.error, color: 'var(--error)' }
+    return { text: info.status === 'connecting' ? '连接中...' : '未连接', color: 'var(--text-tertiary)' }
+  }
 
   function normalizeMcpTransport(transport: unknown): MCPTransport {
     if (transport === 'sse' || transport === 'streamable-http') {
@@ -1410,6 +1423,8 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
       const status = await getStatus()
       tools.value = status.tools || []
       disabledTools.value = new Set(status.disabledTools || [])
+      mcpStatus.value = status.mcpStatus ?? []
+      runtimeInfo.value = status.runtime ?? null
       applyAccessRequirements(status)
     } catch (err: any) {
       rememberAccessRequirementsFromError(err)
@@ -1650,11 +1665,12 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
           entry.originalModelName = entry.modelName.trim()
         }
 
-        // 热重载后刷新工具列表（MCP 开关会影响工具数量）
+        // 热重载后刷新工具列表与 MCP 状态
         try {
           const st = await getStatus()
           tools.value = st.tools || []
           disabledTools.value = new Set(st.disabledTools || [])
+          mcpStatus.value = st.mcpStatus ?? []
         } catch {
           // 静默
         }
@@ -2141,11 +2157,13 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     statusError,
     saving,
     mcpServers,
+    mcpStatusLabel,
     addMcpServer,
     removeMcpServer,
     syncMcpTimeoutInput,
     handleMcpTimeoutInput,
     sanitizeMcpName,
+    runtimeInfo,
     subAgentEntries,
     subAgentModelOptions,
     addSubAgentEntry,

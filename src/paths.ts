@@ -72,6 +72,11 @@ function resolveProjectRoot(): string {
 
 export const projectRoot = resolveProjectRoot();
 
+/** 是否运行在编译后的独立二进制中（import.meta.url 对应的 data/ 不存在） */
+export const isCompiledBinary = !fs.existsSync(
+  path.join(path.resolve(path.dirname(__filename_paths), '..'), 'data')
+);
+
 // ============ 多 Agent 路径支持 ============
 
 /** Agent 专属路径集 */
