@@ -11,7 +11,6 @@
           <span class="settings-kicker">Platform</span>
           <h2>平台配置</h2>
           <p>配置 Iris 运行在哪些平台上，以及各平台的连接凭证。</p>
-          <p class="field-hint" style="margin-top:4px;color:var(--warning, orange)">修改后需要重启才能生效。</p>
         </div>
         <button class="btn-close" type="button" aria-label="关闭" @click="emit('close')">
           <AppIcon :name="ICONS.common.close" />
@@ -238,7 +237,7 @@
         <div class="form-actions">
           <span v-if="saving" class="settings-status">自动保存中...</span>
           <span v-else-if="statusError" class="settings-status error">{{ statusText }}</span>
-          <span v-else class="settings-status">实时热重载，无需手动保存</span>
+          <span v-else class="settings-status">已自动保存</span>
         </div>
       </div>
     </div>

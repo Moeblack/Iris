@@ -142,11 +142,21 @@ async function runSingleAgent(): Promise<void> {
   const result = await bootstrap();
   const { getMCPManager } = result;
 
-  const { platforms, webPlatformRef } = await createPlatforms(result);
+  let { platforms, webPlatformRef } = await createPlatforms(result);
+  let activePlatforms = platforms;
 
-  if (platforms.length === 0) {
+  if (activePlatforms.length === 0) {
     console.error('未配置任何有效平台，请检查 platform.yaml 的 type 字段。');
     process.exit(1);
+  }
+
+  // 注入 Computer Use 热重载引用
+  if (webPlatformRef) {
+    let _computerEnv = result.computerEnv;
+    webPlatformRef.setComputerEnvHandlers(
+      () => _computerEnv,
+      (env?) => { _computerEnv = env; },
+    );
   }
 
   // 注入 Agent 热重载能力
@@ -161,7 +171,28 @@ async function runSingleAgent(): Promise<void> {
     });
   }
 
-  await Promise.all(platforms.map(p => p.start()));
+  // 注入平台配置热重载能力
+  if (webPlatformRef) {
+    const { parsePlatformConfig } = await import('./config/platform');
+    webPlatformRef.setPlatformReloadHandler(async (mergedConfig: any) => {
+      const newPlatformConfig = parsePlatformConfig(mergedConfig.platform);
+
+      // 停止所有非 web 平台
+      const nonWebPlatforms = activePlatforms.filter(p => p !== webPlatformRef);
+      await Promise.all(nonWebPlatforms.map(p => p.stop()));
+
+      // 用新配置重建非 web 平台
+      // 更新 result.config.platform 以便 createPlatforms 使用新配置
+      result.config.platform = newPlatformConfig;
+      const rebuilt = await createPlatforms(result, { excludeWeb: true });
+      await Promise.all(rebuilt.platforms.map(p => p.start()));
+
+      // 更新活跃平台列表（保留 web 平台 + 新的非 web 平台）
+      activePlatforms = [webPlatformRef!, ...rebuilt.platforms];
+    });
+  }
+
+  await Promise.all(activePlatforms.map(p => p.start()));
 
   let cleaning = false;
   const cleanup = async () => {
@@ -170,7 +201,7 @@ async function runSingleAgent(): Promise<void> {
     try {
       const activeMcp = webPlatformRef ? webPlatformRef.getMCPManager() : getMCPManager();
       if (activeMcp) await activeMcp.disconnectAll();
-      await Promise.all(platforms.map(p => p.stop()));
+      await Promise.all(activePlatforms.map(p => p.stop()));
     } catch (err) {
       console.error('清理时出错:', err);
     }
@@ -245,6 +276,13 @@ async function runMultiAgent(): Promise<void> {
         modelId: currentModel.modelId,
         streamEnabled: result.config.system.stream,
       }, displayName, () => result.getMCPManager(), (mgr?) => result.setMCPManager(mgr));
+      // 注入 Computer Use 热重载引用
+      let _cuEnv = result.computerEnv;
+      sharedWebPlatform.setComputerEnvHandlers(
+        () => _cuEnv,
+        (env?) => { _cuEnv = env; },
+        name,
+      );
     }
     allNonConsolePlatforms.push(sharedWebPlatform);
 
