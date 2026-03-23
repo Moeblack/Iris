@@ -29,6 +29,7 @@ import { ToolLoop, ToolLoopConfig, LLMCaller } from './tool-loop';
 import { createLogger } from '../logger';
 import { COMPUTER_USE_FUNCTION_NAMES } from '../computer-use/tools';
 import { sanitizeHistory } from './history-sanitizer';
+import { estimateTokenCount } from 'tokenx';
 import {
   Content, Part, LLMRequest, UsageMetadata, ToolInvocation,
   extractText, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isTextPart,
@@ -730,6 +731,7 @@ export class Backend extends EventEmitter {
         const response = await this.router.chat(request, modelName, callSignal);
         content = response.content;
         content.modelName = modelName || this.router.getCurrentModelName();
+        content.createdAt = Date.now();
         if (response.usageMetadata) {
           content.usageMetadata = response.usageMetadata;
           this.emit('usage', sessionId, response.usageMetadata);
@@ -753,10 +755,19 @@ export class Backend extends EventEmitter {
     // 5. 新用户消息会让 redo 失效：从这里开始就是新的分叉。
     this.clearRedo(sessionId);
     //    立即持久化用户消息（不等工具循环结束，防止中途中断丢失）
-    await this.storage.addMessage(sessionId, { role: 'user', parts: storedUserParts });
+    const userTextForTokens = extractText(storedUserParts);
+    const estimatedUserTokens = userTextForTokens ? estimateTokenCount(userTextForTokens) : 0;
+    await this.storage.addMessage(sessionId, {
+      role: 'user',
+      parts: storedUserParts,
+      createdAt: Date.now(),
+      ...(estimatedUserTokens > 0 ? { usageMetadata: { promptTokenCount: estimatedUserTokens } } : {}),
+    });
     if (isNewSession) {
       await this.updateSessionMeta(sessionId, storedUserParts, true);
     }
+    // 通知前端用户消息的估算 token 数
+    if (estimatedUserTokens > 0) this.emit('user:token', sessionId, estimatedUserTokens);
 
     // 6. 执行工具循环（新增消息通过回调实时持久化；redo 已在步骤 5 清空，无需重复清）
     const result = await loop.run(history, callLLM, {
@@ -930,6 +941,7 @@ export class Backend extends EventEmitter {
     const content: Content = {
       role: 'model',
       parts,
+      createdAt: streamOutputFirstChunkAt ?? Date.now(),
       modelName: modelName || this.router.getCurrentModelName(),
     };
     if (usageMetadata) content.usageMetadata = usageMetadata;

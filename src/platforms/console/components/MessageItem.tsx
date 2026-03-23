@@ -29,6 +29,21 @@ function formatTokenSpeed(tokenOut: number, durationMs: number): string {
   return `${(tokenOut / Math.max(durationMs / 1000, 0.001)).toFixed(1)} t/s`;
 }
 
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const now = new Date();
+  if (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  ) return hhmm;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  if (d.getFullYear() === now.getFullYear()) return `${mm}/${dd} ${hhmm}`;
+  return `${d.getFullYear()}/${mm}/${dd} ${hhmm}`;
+}
+
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string; durationMs?: number }
@@ -37,6 +52,7 @@ export type MessagePart =
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
+  createdAt?: number;
   isError?: boolean;
   isCommand?: boolean;
   parts: MessagePart[];
@@ -179,11 +195,22 @@ export const MessageItem = React.memo(function MessageItem(
           return null;
         })}
 
-        {/* token / 耗时信息 */}
-        {!isUser && !isStreaming && (msg.tokenIn != null || msg.durationMs != null) && (
+        {/* 用户消息元数据（时间 + token 计数） */}
+        {isUser && (msg.createdAt != null || msg.tokenIn != null) && (
           <box marginTop={hasAnyContent ? 1 : 0}>
             <text fg={C.dim}>
-              {msg.durationMs != null ? `${(msg.durationMs / 1000).toFixed(1)}s` : ''}
+              {msg.createdAt != null ? formatTime(msg.createdAt) : ''}
+              {msg.tokenIn != null ? `  \u2191${msg.tokenIn.toLocaleString()}` : ''}
+            </text>
+          </box>
+        )}
+
+        {/* AI 响应元数据（时间 + 耗时 + token + 速度） */}
+        {!isUser && !isStreaming && (msg.createdAt != null || msg.durationMs != null || msg.tokenIn != null) && (
+          <box marginTop={hasAnyContent ? 1 : 0}>
+            <text fg={C.dim}>
+              {msg.createdAt != null ? formatTime(msg.createdAt) : ''}
+              {msg.durationMs != null ? `  ${(msg.durationMs / 1000).toFixed(1)}s` : ''}
               {msg.tokenIn != null ? `  \u2191${msg.tokenIn.toLocaleString()}` : ''}
               {msg.tokenOut != null ? `  \u2193${msg.tokenOut.toLocaleString()}` : ''}
               {msg.tokenOut != null && msg.streamOutputDurationMs != null

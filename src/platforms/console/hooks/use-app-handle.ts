@@ -23,6 +23,7 @@ export interface AppHandle {
   setToolInvocations(invocations: ToolInvocation[]): void;
   setGenerating(generating: boolean): void;
   clearMessages(): void;
+  setUserTokens(tokenCount: number): void;
   commitTools(): void;
   setUsage(usage: UsageMetadata): void;
   setRetryInfo(info: RetryInfo | null): void;
@@ -87,7 +88,7 @@ export function useAppHandle({ onReady, undoRedoRef }: UseAppHandleOptions): Use
         // 发送新用户消息时，清除错误消息、命令消息、以及残留的空 assistant 占位消息
         setMessages((prev) => [
           ...prev.filter((m) => !m.isError && !m.isCommand && !(m.role === 'assistant' && m.parts.length === 0)),
-          { id: nextMsgId(), role, parts: [textPart], ...meta },
+          { id: nextMsgId(), role, parts: [textPart], createdAt: Date.now(), ...meta },
         ]);
       },
       addErrorMessage(text) {
@@ -200,6 +201,18 @@ export function useAppHandle({ onReady, undoRedoRef }: UseAppHandleOptions): Use
         uncommittedStreamPartsRef.current = [];
       },
       commitTools,
+      setUserTokens(tokenCount: number) {
+        setMessages((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === 'user') {
+              const copy = [...prev];
+              copy[i] = { ...copy[i], tokenIn: tokenCount };
+              return copy;
+            }
+          }
+          return prev;
+        });
+      },
       setUsage(usage) {
         setContextTokens(usage.totalTokenCount ?? 0);
         lastUsageRef.current = usage;
