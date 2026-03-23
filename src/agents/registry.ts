@@ -117,8 +117,8 @@ export function setAgentEnabled(enabled: boolean): { success: boolean; message: 
     return {
       success: true,
       message: enabled
-        ? '多 Agent 模式已启用，重启后生效。'
-        : '多 Agent 模式已禁用，重启后生效。',
+        ? '多 Agent 模式已启用。'
+        : '多 Agent 模式已禁用。',
     };
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : '操作失败' };
@@ -217,7 +217,7 @@ export function deleteAgent(name: string): { success: boolean; message: string }
   }
 }
 
-/** 清除缓存（测试用） */
-export function _resetCache(): void {
+/** 清除 manifest 缓存，强制下次调用重新读取文件 */
+export function resetCache(): void {
   _cachedManifest = undefined;
 }

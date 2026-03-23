@@ -13,6 +13,15 @@ type PlatformType = PlatformConfig['types'][number];
 const VALID_TYPES = new Set<string>(['console', 'discord', 'telegram', 'web', 'wxwork', 'lark', 'qq']);
 
 function parseTypes(raw: unknown): PlatformType[] {
+  // 环境变量覆盖（用于嵌入式终端等场景，避免端口冲突）
+  const envOverride = process.env.IRIS_PLATFORM;
+  if (envOverride) {
+    const types = envOverride.split(',')
+      .map(v => v.trim().toLowerCase())
+      .filter(v => VALID_TYPES.has(v)) as PlatformType[];
+    if (types.length > 0) return [...new Set(types)];
+  }
+
   // 数组写法
   if (Array.isArray(raw)) {
     const result = raw

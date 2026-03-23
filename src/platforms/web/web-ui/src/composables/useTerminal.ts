@@ -27,12 +27,55 @@ function getThemeColors(): Record<string, string> {
   }
 }
 
+/** 判断颜色是否为浅色（用于决定 ANSI 颜色映射方案） */
+function isLightBackground(color: string): boolean {
+  const h = color.replace('#', '')
+  if (h.length < 6) return false
+  const r = parseInt(h.substring(0, 2), 16)
+  const g = parseInt(h.substring(2, 4), 16)
+  const b = parseInt(h.substring(4, 6), 16)
+  // 相对亮度
+  return (r * 299 + g * 587 + b * 114) / 1000 > 160
+}
+
 function buildXtermTheme(colors: Record<string, string>) {
+  const bg = colors.bgCanvas || '#090b16'
+  const light = isLightBackground(bg)
+
+  if (light) {
+    // 浅色主题：所有 ANSI 颜色重映射为深色，确保在浅色背景上可见
+    return {
+      background: bg,
+      foreground: colors.textPrimary || '#1a1d2e',
+      cursor: colors.accent || '#6e5eff',
+      cursorAccent: bg,
+      selectionBackground: (colors.accent || '#6e5eff') + '30',
+      selectionForeground: colors.textPrimary || '#1a1d2e',
+      black: '#1a1d2e',
+      red: '#c0392b',
+      green: '#0e7a4a',
+      yellow: '#b8860b',
+      blue: '#5a4ad4',
+      magenta: '#7c3aed',
+      cyan: '#0e6f8e',
+      white: '#5a5f7a',
+      brightBlack: '#6b7280',
+      brightRed: '#e74c3c',
+      brightGreen: '#16a34a',
+      brightYellow: '#ca8a04',
+      brightBlue: '#6e5eff',
+      brightMagenta: '#8b5cf6',
+      brightCyan: '#0891b2',
+      brightWhite: '#374151',
+    }
+  }
+
+  // 深色主题：保持原有配色
   return {
-    background: colors.bgCanvas || '#090b16',
+    background: bg,
     foreground: colors.textPrimary || '#f5f7ff',
     cursor: colors.accent || '#8b7cff',
-    cursorAccent: colors.bgCanvas || '#090b16',
+    cursorAccent: bg,
     selectionBackground: (colors.accent || '#8b7cff') + '40',
     selectionForeground: colors.textPrimary || '#f5f7ff',
     black: '#1a1d2e',
@@ -65,6 +108,8 @@ export function useTerminal() {
   let container: HTMLElement | null = null
   let resizeObserver: ResizeObserver | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** 进程异常退出时禁止自动重连，避免死循环 */
+  let suppressReconnect = false
 
   const { resolvedTheme } = useTheme()
 
@@ -74,6 +119,12 @@ export function useTerminal() {
     const token = loadAuthToken()
     if (token) {
       url.searchParams.set('token', token)
+    }
+    // 传递初始终端尺寸，让服务端用正确尺寸创建 PTY
+    if (terminal && fitAddon) {
+      fitAddon.fit()
+      url.searchParams.set('cols', String(terminal.cols))
+      url.searchParams.set('rows', String(terminal.rows))
     }
     return url.toString()
   }
@@ -126,8 +177,12 @@ export function useTerminal() {
         try {
           const parsed = JSON.parse(event.data.slice(1))
           if (parsed.type === 'exit') {
-            error.value = `终端进程已退出 (code=${parsed.code})`
+            error.value = parsed.code === 0
+              ? '终端进程已正常退出'
+              : `终端进程已退出 (code=${parsed.code})`
             connected.value = false
+            // 收到明确的进程退出消息时，不论退出码都不自动重连
+            suppressReconnect = true
             return
           }
         } catch { /* 忽略无法解析的控制消息 */ }
@@ -139,8 +194,8 @@ export function useTerminal() {
 
     ws.onclose = () => {
       connected.value = false
-      // 非主动关闭时尝试重连
-      if (container) {
+      // 非主动关闭且非异常退出时尝试重连
+      if (container && !suppressReconnect) {
         scheduleReconnect()
       }
     }
@@ -183,10 +238,57 @@ export function useTerminal() {
 
     terminal.open(el)
 
+    // 键盘事件策略：默认全部交给 xterm 处理，仅白名单放行给浏览器。
+    // 对 Ctrl+C/V 做特殊处理（浏览器会拦截为复制/粘贴）。
+    terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type !== 'keydown') return true
+
+      // 白名单：放行给浏览器（return false = 不让 xterm 处理）
+      const key = e.key
+      if (key === 'F5' || key === 'F11' || key === 'F12') return false
+      if (e.ctrlKey && e.shiftKey && (key === 'I' || key === 'i' || key === 'J' || key === 'j' || key === 'R' || key === 'r')) return false
+
+      // Ctrl+V：手动从剪贴板粘贴到终端
+      if (e.ctrlKey && !e.shiftKey && (key === 'v' || key === 'V')) {
+        navigator.clipboard.readText().then((text) => {
+          if (text && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(text)
+          }
+        }).catch(() => {})
+        return false
+      }
+
+      // Ctrl+C：有选中文本→复制；无选中→让 xterm 发 \x03
+      if (e.ctrlKey && !e.shiftKey && (key === 'c' || key === 'C')) {
+        if (terminal!.hasSelection()) {
+          navigator.clipboard.writeText(terminal!.getSelection()).catch(() => {})
+          return false
+        }
+        return true
+      }
+
+      // 其余所有按键交给 xterm 处理
+      return true
+    })
+
     // 首次 fit
     requestAnimationFrame(() => {
       fitAddon?.fit()
     })
+
+    // 鼠标滚轮：当 TUI 应用使用交替屏幕缓冲区时，将滚轮转为上/下箭头键序列
+    el.addEventListener('wheel', (e: WheelEvent) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      // 检查 xterm 是否在交替屏幕缓冲区（scrollback 不可用时即是交替屏幕）
+      const buffer = terminal!.buffer
+      if (buffer && buffer.active.type === 'alternate') {
+        e.preventDefault()
+        const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40))
+        const seq = e.deltaY < 0 ? '\x1b[A' : '\x1b[B' // 上/下箭头
+        ws.send(seq.repeat(lines))
+      }
+      // 普通缓冲区：让 xterm 自身处理滚动（scrollback）
+    }, { passive: false })
 
     // 终端输入 → WebSocket
     terminal.onData((data) => {
@@ -246,6 +348,7 @@ export function useTerminal() {
   }
 
   function reconnect() {
+    suppressReconnect = false
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null

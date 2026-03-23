@@ -17,7 +17,7 @@ import { Backend } from '../../core/backend';
 import type { ImageInput } from '../../core/backend';
 import type { DocumentInput } from '../../media/document-extract.js';
 import { Router, sendJSON, readBody } from './router';
-import { createChatHandler, createChatSuggestionsHandler } from './handlers/chat';
+import { createChatHandler } from './handlers/chat';
 import { createSessionsHandlers } from './handlers/sessions';
 import { createConfigHandlers } from './handlers/config';
 import { createDiffPreviewHandler } from './handlers/diff-preview';
@@ -26,6 +26,8 @@ import { MCPManager } from '../../mcp';
 import { assertManagementToken } from './security/management';
 import { applyRuntimeConfigReload } from '../../config/runtime';
 import { projectRoot, dataDir, configDir, isCompiledBinary } from '../../paths';
+import type { BootstrapResult } from '../../bootstrap';
+import type { AgentDefinition } from '../../agents';
 import { Content, Part, isThoughtTextPart } from '../../types';
 import { formatContent, formatMessages } from './message-format';
 import { createTerminalHandler, type TerminalHandler } from './handlers/terminal';
@@ -111,6 +113,15 @@ export class WebPlatform extends PlatformAdapter {
   /** 终端 WebSocket 处理器 */
   private terminalHandler: TerminalHandler;
 
+  /** Agent 热重载回调：给定 agent 定义，返回 bootstrap 结果 */
+  private reloadHandler?: (agent: AgentDefinition | '__default__') => Promise<BootstrapResult>;
+
+  /** 记录当前是否处于多 agent 模式（用于 reload 时判断模式切换） */
+  private multiAgentMode = false;
+
+  /** 追踪 wireBackendEvents 绑定的监听器，以便精确移除而不影响其他平台 */
+  private backendListenerCleanups = new Map<string, () => void>();
+
   constructor(backend: Backend, config: WebPlatformConfig) {
     super();
     this.config = config;
@@ -146,6 +157,142 @@ export class WebPlatform extends PlatformAdapter {
     });
   }
 
+  /**
+   * 注入热重载回调。由 index.ts 在启动时调用，
+   * 提供按 agent 名称执行 bootstrap 的能力。
+   */
+  setReloadHandler(handler: (agent: AgentDefinition | '__default__') => Promise<BootstrapResult>): void {
+    this.reloadHandler = handler;
+  }
+
+  /**
+   * 热重载 Agent 列表：重新读取 agents.yaml，对比运行中的 agents，
+   * 新增/删除 agent 而不影响未变更的 agent。
+   */
+  async reloadAgents(): Promise<{ added: string[]; removed: string[]; kept: string[]; message: string }> {
+    if (!this.reloadHandler) {
+      return { added: [], removed: [], kept: [], message: '未注入 reload handler，无法热重载。' };
+    }
+
+    const { resetCache, isMultiAgentEnabled, loadAgentDefinitions } = await import('../../agents');
+    resetCache();
+
+    const enabled = isMultiAgentEnabled();
+    const newDefs = enabled ? loadAgentDefinitions() : [];
+    // 多 agent 模式下还有一个 __global__ 全局 AI
+    const newNames = new Set(newDefs.map(d => d.name));
+    if (enabled) newNames.add('__global__');
+
+    const currentNames = new Set(this.agents.keys());
+    const added: string[] = [];
+    const removed: string[] = [];
+    const kept: string[] = [];
+
+    /** 精确移除 Web 平台为指定 agent 绑定的 SSE 监听器，并清理 MCP 连接 */
+    const unwireAgent = async (name: string) => {
+      const cleanup = this.backendListenerCleanups.get(name);
+      if (cleanup) {
+        cleanup();
+        this.backendListenerCleanups.delete(name);
+      }
+      // 断开旧 agent 的 MCP 连接，避免资源泄漏
+      const agent = this.agents.get(name);
+      if (agent) {
+        try {
+          const mcp = agent.getMCPManager();
+          if (mcp) await mcp.disconnectAll();
+        } catch { /* ignore */ }
+      }
+    };
+
+    /** 为 agent 创建上下文并绑定事件 */
+    const bootstrapAgent = async (def: AgentDefinition | '__default__'): Promise<void> => {
+      const result = await this.reloadHandler!(def);
+      const name = def === '__default__' ? 'default' : def.name;
+      const currentModel = result.router.getCurrentModelInfo();
+      let _mcpManager = result.getMCPManager();
+      this.agents.set(name, {
+        name,
+        description: def === '__default__' ? undefined
+          : name === '__global__' ? '全局 AI'
+          : (def as AgentDefinition).description,
+        backend: result.backend,
+        config: {
+          ...this.config,
+          provider: currentModel.provider,
+          modelId: currentModel.modelId,
+          streamEnabled: result.config.system.stream,
+          configPath: result.configDir,
+        },
+        getMCPManager: () => _mcpManager,
+        setMCPManager: (mgr?) => { _mcpManager = mgr; },
+      });
+      this.wireBackendEvents(result.backend, name);
+    };
+
+    if (!enabled) {
+      // 切换到单 Agent 模式
+      if (!this.agents.has('default') || this.agents.size > 1) {
+        for (const name of currentNames) {
+          await unwireAgent(name);
+        }
+        this.agents.clear();
+
+        await bootstrapAgent('__default__');
+        this.defaultAgentName = 'default';
+        this.multiAgentMode = false;
+        return { added: [], removed: [...currentNames], kept: [], message: '已切换到单 Agent 模式。' };
+      }
+      return { added: [], removed: [], kept: ['default'], message: '已处于单 Agent 模式，无需变更。' };
+    }
+
+    // 多 Agent 模式
+    this.multiAgentMode = true;
+
+    // 移除不再存在的 agent
+    for (const name of currentNames) {
+      if (name === 'default' || !newNames.has(name)) {
+        await unwireAgent(name);
+        this.agents.delete(name);
+        removed.push(name);
+      }
+    }
+
+    // 保留未变更的 agent
+    for (const name of newNames) {
+      if (currentNames.has(name) && name !== 'default') {
+        kept.push(name);
+      }
+    }
+
+    // 新增 agent
+    for (const name of newNames) {
+      if (!currentNames.has(name) || currentNames.has('default')) {
+        try {
+          const def = name === '__global__'
+            ? { name: '__global__' } as AgentDefinition
+            : newDefs.find(d => d.name === name);
+          if (!def) {
+            logger.warn(`Agent「${name}」在定义列表中未找到，跳过。`);
+            continue;
+          }
+          await bootstrapAgent(def);
+          added.push(name);
+
+          if (this.defaultAgentName === 'default' || !this.agents.has(this.defaultAgentName)) {
+            this.defaultAgentName = name;
+          }
+        } catch (err) {
+          logger.error(`热重载 Agent「${name}」失败:`, err);
+        }
+      }
+    }
+
+    const msg = `热重载完成：新增 ${added.length}，移除 ${removed.length}，保留 ${kept.length}。`;
+    logger.info(msg);
+    return { added, removed, kept, message: msg };
+  }
+
   /** 根据请求的 X-Agent-Name header 解析 Agent 上下文 */
   resolveAgent(req: http.IncomingMessage): AgentContext {
     const agentName = req.headers['x-agent-name'];
@@ -167,7 +314,7 @@ export class WebPlatform extends PlatformAdapter {
   async start(): Promise<void> {
     // 为所有 Agent 的 Backend 绑定 SSE 事件转发
     for (const agent of this.agents.values()) {
-      this.wireBackendEvents(agent.backend);
+      this.wireBackendEvents(agent.backend, agent.name);
     }
 
     return new Promise((resolve) => {
@@ -314,24 +461,24 @@ export class WebPlatform extends PlatformAdapter {
 
   // ============ 内部方法 ============
 
-  /** 为一个 Backend 绑定 SSE 事件转发 */
-  private wireBackendEvents(backend: Backend): void {
-    backend.on('response', (sid: string, text: string) => {
+  /** 为一个 Backend 绑定 SSE 事件转发，并追踪监听器以便后续精确移除 */
+  private wireBackendEvents(backend: Backend, agentName?: string): void {
+    const onResponse = (sid: string, text: string) => {
       this.writeSSE(sid, { type: 'message', text });
-    });
-    backend.on('stream:start', (sid: string) => {
+    };
+    const onStreamStart = (sid: string) => {
       this.writeSSE(sid, { type: 'stream_start' });
-    });
-    backend.on('stream:chunk', (sid: string, chunk: string) => {
+    };
+    const onStreamChunk = (sid: string, chunk: string) => {
       this.writeSSE(sid, { type: 'delta', text: chunk });
-    });
-    backend.on('error', (sid: string, message: string) => {
+    };
+    const onError = (sid: string, message: string) => {
       this.writeSSE(sid, { type: 'error', message });
-    });
-    backend.on('assistant:content', (sid: string, content: Content) => {
+    };
+    const onAssistantContent = (sid: string, content: Content) => {
       this.writeSSE(sid, { type: 'assistant_content', message: formatContent(content) });
-    });
-    backend.on('stream:parts', (sid: string, parts: Part[]) => {
+    };
+    const onStreamParts = (sid: string, parts: Part[]) => {
       for (const part of parts) {
         if (isThoughtTextPart(part) && part.text) {
           this.writeSSE(sid, {
@@ -341,22 +488,51 @@ export class WebPlatform extends PlatformAdapter {
           });
         }
       }
-    });
-    backend.on('stream:end', (sid: string) => {
+    };
+    const onStreamEnd = (sid: string) => {
       this.writeSSE(sid, { type: 'stream_end' });
-    });
-    backend.on('done', (sid: string, durationMs: number) => {
+    };
+    const onDone = (sid: string, durationMs: number) => {
       this.writeSSE(sid, { type: 'done_meta', durationMs });
-    });
-    backend.on('tool:update', (sid: string, invocations: any[]) => {
+    };
+    const onToolUpdate = (sid: string, invocations: any[]) => {
       this.writeSSE(sid, { type: 'tool_update', invocations });
-    });
-    backend.on('usage', (sid: string, usage: any) => {
+    };
+    const onUsage = (sid: string, usage: any) => {
       this.writeSSE(sid, { type: 'usage', usage });
-    });
-    backend.on('retry', (sid: string, attempt: number, maxRetries: number, error: string) => {
+    };
+    const onRetry = (sid: string, attempt: number, maxRetries: number, error: string) => {
       this.writeSSE(sid, { type: 'retry', attempt, maxRetries, error });
-    });
+    };
+
+    backend.on('response', onResponse);
+    backend.on('stream:start', onStreamStart);
+    backend.on('stream:chunk', onStreamChunk);
+    backend.on('error', onError);
+    backend.on('assistant:content', onAssistantContent);
+    backend.on('stream:parts', onStreamParts);
+    backend.on('stream:end', onStreamEnd);
+    backend.on('done', onDone);
+    backend.on('tool:update', onToolUpdate);
+    backend.on('usage', onUsage);
+    backend.on('retry', onRetry);
+
+    // 记录清理函数，热重载时精确移除这些监听器而不影响其他平台
+    if (agentName) {
+      this.backendListenerCleanups.set(agentName, () => {
+        backend.off('response', onResponse);
+        backend.off('stream:start', onStreamStart);
+        backend.off('stream:chunk', onStreamChunk);
+        backend.off('error', onError);
+        backend.off('assistant:content', onAssistantContent);
+        backend.off('stream:parts', onStreamParts);
+        backend.off('stream:end', onStreamEnd);
+        backend.off('done', onDone);
+        backend.off('tool:update', onToolUpdate);
+        backend.off('usage', onUsage);
+        backend.off('retry', onRetry);
+      });
+    }
   }
 
   /** 每个 session 写入的 SSE 事件计数，用于调试流式传输 */
@@ -389,7 +565,13 @@ export class WebPlatform extends PlatformAdapter {
       sendJSON(res, 200, getAgentStatus());
     });
 
-    // Agent 启用/禁用切换（修改 agents.yaml 的 enabled 字段）
+    // Agent 热重载（手动触发）
+    this.router.post('/api/agents/reload', async (_req, res) => {
+      const result = await this.reloadAgents();
+      sendJSON(res, 200, result);
+    });
+
+    // Agent 启用/禁用切换（修改 agents.yaml 的 enabled 字段，自动热重载）
     this.router.post('/api/agents/toggle', async (req, res) => {
       const body = await readBody(req);
       if (typeof body.enabled !== 'boolean') {
@@ -398,7 +580,12 @@ export class WebPlatform extends PlatformAdapter {
       }
       const { setAgentEnabled } = await import('../../agents');
       const result = setAgentEnabled(body.enabled);
-      sendJSON(res, result.success ? 200 : 500, result);
+      if (result.success) {
+        const reload = await this.reloadAgents();
+        sendJSON(res, 200, { ...result, reload });
+      } else {
+        sendJSON(res, 500, result);
+      }
     });
 
     // Agent CRUD API
@@ -416,7 +603,12 @@ export class WebPlatform extends PlatformAdapter {
       }
       const { createAgent } = await import('../../agents');
       const result = createAgent(body.name.trim(), body.description);
-      sendJSON(res, result.success ? 200 : 400, result);
+      if (result.success) {
+        const reload = await this.reloadAgents();
+        sendJSON(res, 200, { ...result, reload });
+      } else {
+        sendJSON(res, 400, result);
+      }
     });
 
     this.router.post('/api/agents/update', async (req, res) => {
@@ -441,15 +633,16 @@ export class WebPlatform extends PlatformAdapter {
       }
       const { deleteAgent } = await import('../../agents');
       const result = deleteAgent(body.name.trim());
-      sendJSON(res, result.success ? 200 : 400, result);
+      if (result.success) {
+        const reload = await this.reloadAgents();
+        sendJSON(res, 200, { ...result, reload });
+      } else {
+        sendJSON(res, 400, result);
+      }
     });
 
     // 聊天 API
     this.router.post('/api/chat', createChatHandler(this));
-    this.router.get('/api/chat/suggestions', async (req, res) => {
-      const { backend } = this.resolveAgent(req);
-      return createChatSuggestionsHandler(backend)(req, res);
-    });
 
     // 会话管理 API（按 agent 隔离 storage）
     this.router.get('/api/sessions', async (req, res) => {

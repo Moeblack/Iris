@@ -6,10 +6,14 @@
  */
 
 import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
+import { execSync } from 'child_process';
 import type { Duplex } from 'stream';
 import * as http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createLogger } from '../../../logger';
+import { isCompiledBinary, projectRoot } from '../../../paths';
 
 const logger = createLogger('Terminal');
 
@@ -40,30 +44,94 @@ export function createTerminalHandler(): TerminalHandler {
   const wss = new WebSocketServer({ noServer: true });
   let nextId = 1;
 
-  function getShell(): string {
-    if (os.platform() === 'win32') {
-      return process.env.COMSPEC || 'powershell.exe';
-    }
-    return process.env.SHELL || '/bin/bash';
-  }
-
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
     if (!pty) {
       ws.close(1011, 'node-pty 不可用');
       return;
     }
 
     const id = `term-${nextId++}`;
-    const shell = getShell();
+
+    // 从 URL query 读取客户端终端尺寸
+    const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const initialCols = Math.max(1, parseInt(reqUrl.searchParams.get('cols') ?? '', 10) || 120);
+    const initialRows = Math.max(1, parseInt(reqUrl.searchParams.get('rows') ?? '', 10) || 30);
+
+    // 确定启动命令
+    const tuiEnv = { ...process.env, IRIS_PLATFORM: 'console' } as Record<string, string>;
+    let spawnCmd: string;
+    let spawnArgs: string[];
+
+    if (isCompiledBinary) {
+      spawnCmd = process.execPath;
+      spawnArgs = [];
+    } else {
+      const entryFile = path.join(projectRoot, 'src', 'index.ts');
+      // 查找 bun 可执行文件绝对路径
+      let bunPath: string | null = null;
+
+      // 1. 检查 PATH（用 where/which 获取绝对路径）
+      try {
+        const whereCmd = os.platform() === 'win32' ? 'where bun.exe' : 'which bun';
+        const resolved = execSync(whereCmd, { encoding: 'utf-8', timeout: 5000 }).trim().split(/\r?\n/)[0];
+        if (resolved && fs.existsSync(resolved)) {
+          bunPath = resolved;
+        }
+      } catch {}
+
+      // 2. 检查常见安装位置
+      if (!bunPath) {
+        const candidates = [
+          path.join(os.homedir(), '.bun', 'bin', os.platform() === 'win32' ? 'bun.exe' : 'bun'),
+        ];
+        if (os.platform() === 'win32') {
+          if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'bun', 'bun.exe'));
+          if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm', 'bun.cmd'));
+        }
+        for (const c of candidates) {
+          if (fs.existsSync(c)) {
+            bunPath = c;
+            break;
+          }
+        }
+      }
+
+      if (bunPath) {
+        logger.info(`Bun 找到: ${bunPath}`);
+        spawnCmd = bunPath;
+        spawnArgs = ['run', entryFile];
+      } else {
+        // 没有 bun：在 PTY 内用 PowerShell 官方脚本安装后启动
+        logger.info('未检测到 Bun 运行时，将在终端内自动安装后启动 TUI。');
+        if (os.platform() === 'win32') {
+          // 使用 PowerShell + 官方安装脚本，安装到 ~/.bun，然后用完整路径启动
+          // PowerShell 单引号字符串中反斜杠是字面量，不需要转义
+          const bunTarget = path.join(os.homedir(), '.bun', 'bin', 'bun.exe');
+          spawnCmd = 'powershell.exe';
+          spawnArgs = ['-NoProfile', '-Command',
+            `Write-Host '[Iris] 正在安装 Bun 运行时...'; ` +
+            `irm bun.sh/install.ps1 | iex; ` +
+            `if(Test-Path '${bunTarget}'){ Write-Host '[Iris] 安装完成，正在启动 TUI...'; & '${bunTarget}' run '${entryFile}' } ` +
+            `else { Write-Host '[Iris] Bun 安装失败。请手动安装: https://bun.sh'; Read-Host '按 Enter 关闭' }`,
+          ];
+        } else {
+          // Unix: 使用官方安装脚本
+          spawnCmd = process.env.SHELL || '/bin/bash';
+          spawnArgs = ['-c',
+            `echo '[Iris] 正在安装 Bun 运行时...' && curl -fsSL https://bun.sh/install | bash && echo '[Iris] 安装完成，正在启动 TUI...' && ~/.bun/bin/bun run "${entryFile}" || echo '[Iris] Bun 安装失败，请手动安装: https://bun.sh'`,
+          ];
+        }
+      }
+    }
 
     let proc: import('node-pty').IPty;
     try {
-      proc = pty.spawn(shell, [], {
+      proc = pty.spawn(spawnCmd, spawnArgs, {
         name: 'xterm-256color',
-        cols: 80,
-        rows: 24,
+        cols: initialCols,
+        rows: initialRows,
         cwd: process.cwd(),
-        env: process.env as Record<string, string>,
+        env: tuiEnv,
       });
     } catch (err) {
       logger.error(`PTY 创建失败: ${err}`);
@@ -73,7 +141,7 @@ export function createTerminalHandler(): TerminalHandler {
 
     const session: TerminalSession = { id, pty: proc, ws };
     sessions.set(id, session);
-    logger.info(`终端会话已创建: ${id} (shell=${shell}, pid=${proc.pid})`);
+    logger.info(`终端会话已创建: ${id} (cmd=${spawnCmd}, pid=${proc.pid})`);
 
     // PTY 输出 → WebSocket
     proc.onData((data: string) => {

@@ -149,6 +149,18 @@ async function runSingleAgent(): Promise<void> {
     process.exit(1);
   }
 
+  // 注入 Agent 热重载能力
+  if (webPlatformRef) {
+    webPlatformRef.setReloadHandler(async (agent) => {
+      if (agent === '__default__' || (typeof agent === 'object' && agent.name === '__global__')) {
+        return bootstrap();
+      }
+      const { resolveAgentPaths } = await import('./agents');
+      const paths = resolveAgentPaths(agent);
+      return bootstrap({ agentName: agent.name, agentPaths: paths });
+    });
+  }
+
   await Promise.all(platforms.map(p => p.start()));
 
   let cleaning = false;
@@ -173,8 +185,9 @@ async function runSingleAgent(): Promise<void> {
 async function runMultiAgent(): Promise<void> {
   const agentDefs = loadAgentDefinitions();
   if (agentDefs.length === 0) {
-    console.error('[Iris] agents.yaml 已启用但未定义任何 agent。');
-    process.exit(1);
+    console.log('[Iris] agents.yaml 已启用但未定义任何 agent，回退到单 Agent 模式。');
+    await runSingleAgent();
+    return;
   }
 
   // 1. 统一 bootstrap 所有 agent + 全局配置
@@ -234,6 +247,15 @@ async function runMultiAgent(): Promise<void> {
       }, displayName, () => result.getMCPManager(), (mgr?) => result.setMCPManager(mgr));
     }
     allNonConsolePlatforms.push(sharedWebPlatform);
+
+    // 注入 Agent 热重载能力
+    sharedWebPlatform.setReloadHandler(async (agent) => {
+      if (agent === '__default__' || (typeof agent === 'object' && agent.name === '__global__')) {
+        return bootstrap();
+      }
+      const paths = resolveAgentPaths(agent as AgentDefinition);
+      return bootstrap({ agentName: (agent as AgentDefinition).name, agentPaths: paths });
+    });
   }
 
   // 创建其他非 Console/非 Web 平台

@@ -13,4 +13,5 @@ export {
   createAgent,
   updateAgent,
   deleteAgent,
+  resetCache,
 } from './registry';

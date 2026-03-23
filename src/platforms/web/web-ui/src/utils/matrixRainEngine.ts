@@ -30,13 +30,12 @@ interface ThemeColors {
   bgCanvas: string
 }
 
-/** 从 CSS 变量读取当前主题色 */
+/** Matrix 代码雨始终使用深色配色，不跟随主题 */
 function readThemeColors(): ThemeColors {
-  const style = getComputedStyle(document.documentElement)
   return {
-    accent: style.getPropertyValue('--accent').trim() || '#8b7cff',
-    accentCyan: style.getPropertyValue('--accent-cyan').trim() || '#74d7ff',
-    bgCanvas: style.getPropertyValue('--bg-canvas').trim() || '#090b16',
+    accent: '#8b7cff',
+    accentCyan: '#74d7ff',
+    bgCanvas: '#090b16',
   }
 }
 
@@ -99,9 +98,9 @@ export function startMatrixRain(
     return () => {}
   }
 
-  const fontSize = config.fontSize ?? 14
+  const fontSize = config.fontSize ?? 22
   const trailLength = config.trailLength ?? 20
-  const columnWidth = config.columnWidth ?? 16
+  const columnWidth = config.columnWidth ?? 26
   const colors = readThemeColors()
   const dpr = window.devicePixelRatio || 1
 
