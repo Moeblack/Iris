@@ -10,6 +10,7 @@ import { isMasked, readEditableConfig, updateEditableConfig } from '../../config
 import { applyRuntimeConfigReload } from '../../config/runtime';
 import { MCPManager, MCPServerInfo } from '../../mcp';
 import { supportsConsoleDiffApprovalViewSetting } from './diff-approval';
+import type { BootstrapExtensionRegistry } from '../../bootstrap/extensions';
 
 export const CONSOLE_LLM_PROVIDER_OPTIONS = [
   'gemini',
@@ -30,7 +31,7 @@ export type ConsoleMCPTransport = typeof CONSOLE_MCP_TRANSPORT_OPTIONS[number];
 export interface ConsoleModelSettings {
   modelName: string;
   originalModelName?: string;
-  provider: ConsoleLLMProvider;
+  provider: string;
   apiKey: string;
   /** 提供商真实模型 ID，对应 LLMConfig.model */
   modelId: string;
@@ -92,6 +93,7 @@ interface ConsoleSettingsControllerOptions {
   configDir: string;
   getMCPManager(): MCPManager | undefined;
   setMCPManager(manager?: MCPManager): void;
+  extensions?: Pick<BootstrapExtensionRegistry, 'llmProviders' | 'ocrProviders'>;
 }
 
 function normalizeTransport(value: unknown): ConsoleMCPTransport {
@@ -318,12 +320,14 @@ export class ConsoleSettingsController {
   private configDir: string;
   private getMCPManager: () => MCPManager | undefined;
   private setMCPManager: (manager?: MCPManager) => void;
+  private extensions?: Pick<BootstrapExtensionRegistry, 'llmProviders' | 'ocrProviders'>;
 
   constructor(options: ConsoleSettingsControllerOptions) {
     this.backend = options.backend;
     this.configDir = options.configDir;
     this.getMCPManager = options.getMCPManager;
     this.setMCPManager = options.setMCPManager;
+    this.extensions = options.extensions;
   }
 
   async loadSnapshot(): Promise<ConsoleSettingsSnapshot> {
@@ -439,6 +443,7 @@ export class ConsoleSettingsController {
           backend: this.backend,
           getMCPManager: this.getMCPManager,
           setMCPManager: this.setMCPManager,
+          extensions: this.extensions,
         },
         mergedRaw,
       );

@@ -31,18 +31,23 @@ export const DEFAULTS: Record<string, Partial<LLMConfig> & { contextWindow?: num
 
 /** 解析单个 LLM 提供商配置 */
 export function parseSingleLLMConfig(raw: any = {}): LLMConfig {
-  const provider = (raw.provider ?? 'gemini') as LLMConfig['provider'];
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const provider = String(source.provider ?? 'gemini');
   const defaults = DEFAULTS[provider] ?? {};
 
   return {
+    ...source,
     provider,
-    apiKey: raw.apiKey ?? '',
-    model: raw.model || defaults.model || '',
-    baseUrl: raw.baseUrl || defaults.baseUrl || '',
-    contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : defaults.contextWindow,
-    supportsVision: typeof raw.supportsVision === 'boolean' ? raw.supportsVision : undefined,
-    headers: raw.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers) ? raw.headers : undefined,
-    requestBody: raw.requestBody && typeof raw.requestBody === 'object' && !Array.isArray(raw.requestBody) ? raw.requestBody : undefined,
+    apiKey: source.apiKey ?? '',
+    model: source.model || defaults.model || '',
+    baseUrl: source.baseUrl || defaults.baseUrl || '',
+    contextWindow: typeof source.contextWindow === 'number' ? source.contextWindow : defaults.contextWindow,
+    supportsVision: typeof source.supportsVision === 'boolean' ? source.supportsVision : undefined,
+    autoSummaryThreshold: (typeof source.autoSummaryThreshold === 'number' || typeof source.autoSummaryThreshold === 'string')
+      ? source.autoSummaryThreshold
+      : undefined,
+    headers: source.headers && typeof source.headers === 'object' && !Array.isArray(source.headers) ? source.headers : undefined,
+    requestBody: source.requestBody && typeof source.requestBody === 'object' && !Array.isArray(source.requestBody) ? source.requestBody : undefined,
   };
 }
 
@@ -74,8 +79,10 @@ export function parseLLMConfig(raw: any = {}): LLMRegistryConfig {
     if (models.length > 0) {
       const modelNames = new Set(models.map(model => model.modelName));
       const requestedDefault = normalizeModelName(raw.defaultModel);
+      const requestedSummary = normalizeModelName(raw.summaryModel);
       return {
         defaultModelName: requestedDefault && modelNames.has(requestedDefault) ? requestedDefault : models[0].modelName,
+        summaryModelName: requestedSummary && modelNames.has(requestedSummary) ? requestedSummary : undefined,
         models,
       };
     }

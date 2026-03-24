@@ -5,7 +5,7 @@
 import type { OCRConfig } from './ocr';
 
 export interface LLMConfig {
-  provider: 'gemini' | 'openai-compatible' | 'claude' | 'openai-responses';
+  provider: string;
   apiKey: string;
   /** 提供商真实模型 id */
   model: string;
@@ -14,10 +14,17 @@ export interface LLMConfig {
   contextWindow?: number;
   /** 显式声明当前模型是否支持图片输入 */
   supportsVision?: boolean;
+  /**
+   * 自动上下文压缩阈值（token 数超过此值时自动执行 /compact）
+   * 支持绝对值（如 100000）或 contextWindow 百分比（如 "80%"）
+   * 不设置则不自动压缩
+   */
+  autoSummaryThreshold?: number | string;
   /** 自定义请求头，会覆盖 provider 内置同名 header */
   headers?: Record<string, string>;
   /** 自定义请求体，会深合并到 provider 编码后的最终请求体，支持嵌套参数 */
   requestBody?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 /** 具名模型配置（从 YAML 键名解析出 modelName） */
@@ -29,13 +36,15 @@ export interface LLMModelDef extends LLMConfig {
 export interface LLMRegistryConfig {
   /** 启动时默认使用的模型名称 */
   defaultModelName: string;
+  /** 用于 /compact 上下文压缩的模型名称（需指向 models 中的某个模型，不填则使用 defaultModel） */
+  summaryModelName?: string;
   /** 可用模型列表 */
   models: LLMModelDef[];
 }
 
 export interface PlatformConfig {
-  /** 启动的平台类型列表（兼容单字符串和数组写法） */
-  types: Array<'console' | 'discord' | 'telegram' | 'web' | 'wxwork' | 'lark' | 'qq'>;
+  /** 启动的平台类型列表（兼容单字符串和数组写法；支持插件平台注册的自定义平台） */
+  types: string[];
   discord: { token: string };
   telegram: {
     token: string;
@@ -88,12 +97,14 @@ export interface PlatformConfig {
     /** 是否在回复中展示工具执行状态（默认 true） */
     showToolStatus?: boolean;
   };
+  [key: string]: unknown;
 }
 
 export interface StorageConfig {
-  type: 'json-file' | 'sqlite';
+  type: string;
   dir: string;
   dbPath?: string;
+  [key: string]: unknown;
 }
 
 export interface ToolPolicyConfig {
@@ -157,8 +168,11 @@ export interface SystemConfig {
 export interface MemoryConfig {
   /** 是否启用记忆，默认 false */
   enabled: boolean;
+  /** 记忆提供商类型，默认 sqlite */
+  type?: string;
   /** 数据库路径，默认 ~/.iris/memory.db */
   dbPath?: string;
+  [key: string]: unknown;
 }
 
 export interface MCPServerConfig {
@@ -282,6 +296,14 @@ export interface CUToolPolicy {
   exclude?: string[];
 }
 
+/** 上下文压缩（/compact）配置 */
+export interface SummaryConfig {
+  /** 总结 AI 的系统提示词 */
+  systemPrompt: string;
+  /** 追加在对话末尾的用户指令 */
+  userPrompt: string;
+}
+
 export interface AppConfig {
   llm: LLMRegistryConfig;
   ocr?: OCRConfig;
@@ -298,7 +320,9 @@ export interface AppConfig {
   /** Computer Use 配置（可选，对应 computer_use.yaml） */
   computerUse?: ComputerUseConfig;
   /** 插件配置（可选，对应 plugins.yaml） */
-  plugins?: Array<{ name: string; type?: 'local' | 'npm'; enabled?: boolean; config?: Record<string, unknown> }>;
+  plugins?: Array<{ name: string; type?: 'local' | 'npm'; enabled?: boolean; priority?: number; config?: Record<string, unknown> }>;
+  /** 上下文压缩配置（对应 summary.yaml） */
+  summary: SummaryConfig;
 }
 
 /** 子代理类型定义（配置文件格式） */

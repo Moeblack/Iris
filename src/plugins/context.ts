@@ -11,17 +11,21 @@ import type { AppConfig } from '../config/types';
 import type { ToolRegistry } from '../tools/registry';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
+import type { LLMRouter } from '../llm/router';
 import type { PluginContext, PluginHook, PluginLogger, ToolWrapper, IrisAPI } from './types';
 import { createLogger } from '../logger';
+import type { PlatformAdapter } from '../platforms/base';
 
 export class PluginContextImpl implements PluginContext {
   private hooks: PluginHook[] = [];
   private readyCallbacks: Array<(api: IrisAPI) => void | Promise<void>> = [];
+  private _platformReadyCallbacks: Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>> = [];
 
   constructor(
     private pluginName: string,
     private toolRegistry: ToolRegistry,
     private modeRegistry: ModeRegistry,
+    private router: LLMRouter,
     private appConfig: AppConfig,
     private promptAssembler: PromptAssembler,
     private pluginConfig?: Record<string, unknown>,
@@ -59,6 +63,10 @@ export class PluginContextImpl implements PluginContext {
     return this.modeRegistry;
   }
 
+  getRouter(): LLMRouter {
+    return this.router;
+  }
+
   // ---- 工具拦截 ----
 
   wrapTool(toolName: string, wrapper: ToolWrapper): void {
@@ -84,6 +92,10 @@ export class PluginContextImpl implements PluginContext {
 
   onReady(callback: (api: IrisAPI) => void | Promise<void>): void {
     this.readyCallbacks.push(callback);
+  }
+
+  onPlatformsReady(callback: (platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>): void {
+    this._platformReadyCallbacks.push(callback);
   }
 
   // ---- 工具方法 ----
@@ -113,5 +125,10 @@ export class PluginContextImpl implements PluginContext {
   /** 获取插件注册的 onReady 回调 */
   getReadyCallbacks(): Array<(api: IrisAPI) => void | Promise<void>> {
     return this.readyCallbacks;
+  }
+
+  /** 获取插件注册的 onPlatformsReady 回调 */
+  getPlatformReadyCallbacks(): Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>> {
+    return this._platformReadyCallbacks;
   }
 }

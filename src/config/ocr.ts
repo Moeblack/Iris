@@ -3,10 +3,11 @@
  */
 
 export interface OCRConfig {
-  provider: 'openai-compatible';
+  provider: string;
   apiKey: string;
   baseUrl: string;
   model: string;
+  [key: string]: unknown;
 }
 
 export const OCR_DEFAULTS: Omit<OCRConfig, 'provider' | 'apiKey'> = {
@@ -19,12 +20,10 @@ export function parseOCRConfig(raw: any): OCRConfig | undefined {
     return undefined;
   }
 
-  const provider = raw.provider ?? 'openai-compatible';
-  if (provider !== 'openai-compatible') {
-    throw new Error(`不支持的 OCR provider: ${String(provider)}`);
-  }
+  const provider = String(raw.provider ?? 'openai-compatible');
 
   return {
+    ...raw,
     provider,
     apiKey: raw.apiKey ?? '',
     baseUrl: raw.baseUrl || OCR_DEFAULTS.baseUrl,

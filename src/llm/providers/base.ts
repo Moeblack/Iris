@@ -48,7 +48,14 @@ function mergeRequestBody(baseBody: unknown, overrideBody?: Record<string, unkno
   return deepMergeObjects(baseBody, overrideBody);
 }
 
-export class LLMProvider {
+export interface LLMProviderLike {
+  setLogging(logsDir: string): void;
+  chat(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
+  chatStream(request: LLMRequest, signal?: AbortSignal): AsyncGenerator<LLMStreamChunk>;
+  readonly name: string;
+}
+
+export class LLMProvider implements LLMProviderLike {
   private providerName: string;
   /** 日志目录。有值时启用请求/响应日志，每个 Provider 实例独立。 */
   private loggingDir?: string;

@@ -24,16 +24,21 @@ import { ToolStateManager } from '../tools/state';
 import { PromptAssembler } from '../prompt/assembler';
 import { MemoryProvider } from '../memory/base';
 import { ModeRegistry, ModeDefinition, applyToolFilter } from '../modes';
-import { OCRService, createOCRTextPart, isOCRTextPart, stripOCRTextMarker } from '../ocr';
+import type { OCRProvider } from '../ocr';
+import { createOCRTextPart, isOCRTextPart, stripOCRTextMarker } from '../ocr';
 import { ToolLoop, ToolLoopConfig, LLMCaller } from './tool-loop';
 import { createLogger } from '../logger';
 import { COMPUTER_USE_FUNCTION_NAMES } from '../computer-use/tools';
 import { sanitizeHistory } from './history-sanitizer';
 import { estimateTokenCount } from 'tokenx';
 import {
-  Content, Part, LLMRequest, UsageMetadata, ToolInvocation,
   extractText, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isTextPart,
 } from '../types';
+// 上游 main 新增的 summary 相关导入
+import type { SummaryConfig } from '../config/types';
+import { summarizeHistory } from './summarizer';
+// feat 分支新增的 ToolAttachment 类型（MCP 附件旁路功能需要）
+import type { Content, Part, LLMRequest, UsageMetadata, ToolInvocation, ToolAttachment } from '../types';
 import { resizeImage, formatDimensionNote } from '../media/image-resize.js';
 import { extractDocument, isSupportedDocumentMime } from '../media/document-extract.js';
 import { convertToPDF } from '../media/office-to-pdf.js';
@@ -173,9 +178,13 @@ export interface BackendConfig {
   /** 当前活动模型配置（用于 vision 能力判定） */
   currentLLMConfig?: LLMConfig;
   /** OCR 服务（当主模型不支持 vision 时回退使用） */
-  ocrService?: OCRService;
+  ocrService?: OCRProvider;
   /** Computer Use 截图保留的最近轮次数（默认 3） */
   maxRecentScreenshots?: number;
+  /** 用于 /compact 上下文压缩的模型名称（需在 LLMRouter 中已注册） */
+  summaryModelName?: string;
+  /** 上下文压缩提示词配置 */
+  summaryConfig?: SummaryConfig;
 }
 
 export interface BackendEvents {
@@ -201,6 +210,15 @@ export interface BackendEvents {
   'done': (sessionId: string, durationMs: number) => void;
   /** 一轮模型输出完成后的完整内容（结构化） */
   'assistant:content': (sessionId: string, content: Content) => void;
+  /** 自动上下文压缩完成（阈值触发） */
+  'auto-compact': (sessionId: string, summaryText: string) => void;
+  /**
+   * 工具执行产生的附件（例如 MCP 生图结果）。
+   *
+   * 这里是平台层的旁路通道：附件不进入 LLM 上下文，
+   * 由具体平台自己决定如何发送给用户。
+   */
+  'attachments': (sessionId: string, attachments: ToolAttachment[]) => void;
 }
 
 // ============ Backend 类 ============
@@ -217,8 +235,10 @@ export class Backend extends EventEmitter {
   private modeRegistry?: ModeRegistry;
   private defaultMode?: string;
   private currentLLMConfig?: LLMConfig;
-  private ocrService?: OCRService;
+  private ocrService?: OCRProvider;
   private maxRecentScreenshots: number;
+  private summaryModelName?: string;
+  private summaryConfig?: SummaryConfig;
 
   private toolLoop: ToolLoop;
   private toolLoopConfig: ToolLoopConfig;
@@ -232,6 +252,9 @@ export class Backend extends EventEmitter {
 
   /** 每个 session 的 redo 栈。每组元素都是一次 undo 移除的完整 Content 组。 */
   private redoHistory = new Map<string, Content[][]>();
+
+  /** 每个 session 最近一次 LLM 调用的 totalTokenCount（用于自动总结阈值判断） */
+  private lastSessionTokens = new Map<string, number>();
 
   /** 插件钩子列表 */
   private pluginHooks: PluginHook[] = [];
@@ -261,6 +284,8 @@ export class Backend extends EventEmitter {
     this.currentLLMConfig = config?.currentLLMConfig;
     this.ocrService = config?.ocrService;
     this.maxRecentScreenshots = config?.maxRecentScreenshots ?? 3;
+    this.summaryModelName = config?.summaryModelName;
+    this.summaryConfig = config?.summaryConfig;
 
     this.toolLoopConfig = {
       maxRounds: config?.maxToolRounds ?? 200,
@@ -280,12 +305,17 @@ export class Backend extends EventEmitter {
   setPluginHooks(hooks: PluginHook[]): void {
     this.pluginHooks = hooks;
 
+    this.toolLoopConfig.beforeToolExec = undefined;
+    this.toolLoopConfig.afterToolExec = undefined;
+    this.toolLoopConfig.beforeLLMCall = undefined;
+    this.toolLoopConfig.afterLLMCall = undefined;
+
     // 将 onBeforeToolExec 钩子组合为拦截器，注入到工具循环配置
-    const execHooks = hooks.filter(h => h.onBeforeToolExec);
-    if (execHooks.length > 0) {
+    const beforeToolExecHooks = hooks.filter(h => h.onBeforeToolExec);
+    if (beforeToolExecHooks.length > 0) {
       this.toolLoopConfig.beforeToolExec = async (toolName, args) => {
         let currentArgs = args;
-        for (const hook of execHooks) {
+        for (const hook of beforeToolExecHooks) {
           try {
             const result = await hook.onBeforeToolExec!({ toolName, args: currentArgs });
             if (result) {
@@ -298,6 +328,66 @@ export class Backend extends EventEmitter {
         }
         if (currentArgs !== args) return { blocked: false as const, args: currentArgs };
         return undefined;
+      };
+    }
+
+    const afterToolExecHooks = hooks.filter(h => h.onAfterToolExec);
+    if (afterToolExecHooks.length > 0) {
+      this.toolLoopConfig.afterToolExec = async (toolName, args, result, durationMs) => {
+        let currentResult = result;
+        let changed = false;
+        for (const hook of afterToolExecHooks) {
+          try {
+            const hookResult = await hook.onAfterToolExec!({ toolName, args, result: currentResult, durationMs });
+            if (hookResult) {
+              currentResult = hookResult.result;
+              changed = true;
+            }
+          } catch (err) {
+            logger.warn(`插件钩子 "${hook.name}" onAfterToolExec 执行失败:`, err);
+          }
+        }
+        return changed ? { result: currentResult } : undefined;
+      };
+    }
+
+    const beforeLLMCallHooks = hooks.filter(h => h.onBeforeLLMCall);
+    if (beforeLLMCallHooks.length > 0) {
+      this.toolLoopConfig.beforeLLMCall = async (request, round) => {
+        let currentRequest = request;
+        let changed = false;
+        for (const hook of beforeLLMCallHooks) {
+          try {
+            const hookResult = await hook.onBeforeLLMCall!({ request: currentRequest, round });
+            if (hookResult) {
+              currentRequest = hookResult.request;
+              changed = true;
+            }
+          } catch (err) {
+            logger.warn(`插件钩子 "${hook.name}" onBeforeLLMCall 执行失败:`, err);
+          }
+        }
+        return changed ? { request: currentRequest } : undefined;
+      };
+    }
+
+    const afterLLMCallHooks = hooks.filter(h => h.onAfterLLMCall);
+    if (afterLLMCallHooks.length > 0) {
+      this.toolLoopConfig.afterLLMCall = async (content, round) => {
+        let currentContent = content;
+        let changed = false;
+        for (const hook of afterLLMCallHooks) {
+          try {
+            const hookResult = await hook.onAfterLLMCall!({ content: currentContent, round });
+            if (hookResult) {
+              currentContent = hookResult.content;
+              changed = true;
+            }
+          } catch (err) {
+            logger.warn(`插件钩子 "${hook.name}" onAfterLLMCall 执行失败:`, err);
+          }
+        }
+        return changed ? { content: currentContent } : undefined;
       };
     }
   }
@@ -358,6 +448,15 @@ export class Backend extends EventEmitter {
   async clearSession(sessionId: string): Promise<void> {
     await this.storage.clearHistory(sessionId);
     this.clearRedo(sessionId);
+    this.lastSessionTokens.delete(sessionId);
+
+    for (const hook of this.pluginHooks) {
+      try {
+        await hook.onSessionClear?.({ sessionId });
+      } catch (err) {
+        logger.warn(`插件钩子 "${hook.name}" onSessionClear 执行失败:`, err);
+      }
+    }
   }
 
   /** 获取指定会话的历史消息 */
@@ -383,6 +482,62 @@ export class Backend extends EventEmitter {
   /** 截断会话历史 */
   async truncateHistory(sessionId: string, keepCount: number): Promise<void> {
     await this.storage.truncateHistory(sessionId, keepCount);
+  }
+
+  /**
+   * 压缩当前会话的上下文。
+   *
+   * 取最后一条总结消息（若有）之后的所有历史，调用 LLM 生成摘要，
+   * 然后将摘要作为 isSummary 标记的 user 消息追加到历史末尾。
+   * 后续 LLM 调用在 prepareHistoryForLLM 中会自动从最后一条总结消息开始加载。
+   */
+  async summarize(sessionId: string, signal?: AbortSignal): Promise<string> {
+    const history = await this.storage.getHistory(sessionId);
+    if (history.length === 0) {
+      throw new Error('当前会话没有历史消息');
+    }
+
+    // 定位最后一条总结消息，只总结其后的内容
+    let startIndex = 0;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].isSummary) {
+        startIndex = i;
+        break;
+      }
+    }
+
+    const toSummarize = history.slice(startIndex);
+    if (toSummarize.length < 2) {
+      throw new Error('消息过少，无需压缩');
+    }
+
+    // 调用 LLM 生成摘要
+    const summaryText = await summarizeHistory(
+      this.router,
+      toSummarize,
+      this.summaryModelName,
+      this.summaryConfig,
+      signal,
+    );
+
+    const now = Date.now();
+    const fullText = `[Context Summary]\n\n${summaryText}`;
+
+    // 估算 token 数
+    const estimatedTokens = estimateTokenCount(fullText);
+
+    // 持久化总结 user 消息
+    const summaryContent: Content = {
+      role: 'user',
+      parts: [{ text: fullText }],
+      isSummary: true,
+      createdAt: now,
+      ...(estimatedTokens > 0 ? { usageMetadata: { promptTokenCount: estimatedTokens } } : {}),
+    };
+    await this.storage.addMessage(sessionId, summaryContent);
+
+    this.clearRedo(sessionId);
+    return summaryText;
   }
 
   /** 清空指定会话的 redo 栈。任何新的写入都应使 redo 失效。 */
@@ -543,6 +698,11 @@ export class Backend extends EventEmitter {
     return this.prompt;
   }
 
+  /** 获取当前活跃的 sessionId（工具执行期间有效） */
+  getActiveSessionId(): string | undefined {
+    return this.activeSessionId;
+  }
+
   /** 获取模式注册表引用 */
   getModeRegistry(): ModeRegistry | undefined {
     return this.modeRegistry;
@@ -634,7 +794,7 @@ export class Backend extends EventEmitter {
     toolsConfig?: ToolsConfig;
     systemPrompt?: string;
     currentLLMConfig?: LLMConfig;
-    ocrService?: OCRService;
+    ocrService?: OCRProvider;
     maxRecentScreenshots?: number;
   }): void {
     if (opts.stream !== undefined) this.stream = opts.stream;
@@ -656,6 +816,30 @@ export class Backend extends EventEmitter {
 
   // ============ 核心流程 ============
 
+  /**
+   * 根据当前模型配置解析自动总结阈值（绝对 token 数）。
+   * 支持绝对值（number）和 contextWindow 百分比（string "80%"）。
+   * 未配置或无法解析时返回 undefined。
+   */
+  private getAutoSummaryThreshold(): number | undefined {
+    const config = this.currentLLMConfig;
+    if (!config?.autoSummaryThreshold) return undefined;
+    const raw = config.autoSummaryThreshold;
+    if (typeof raw === 'number') return raw > 0 ? raw : undefined;
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (trimmed.endsWith('%')) {
+        const percent = parseFloat(trimmed);
+        if (!isNaN(percent) && percent > 0 && config.contextWindow && config.contextWindow > 0) {
+          return Math.floor(config.contextWindow * percent / 100);
+        }
+      }
+      const num = parseFloat(trimmed);
+      return !isNaN(num) && num > 0 ? num : undefined;
+    }
+    return undefined;
+  }
+
   private async handleMessage(sessionId: string, storedUserParts: Part[], llmUserParts: Part[], signal?: AbortSignal): Promise<void> {
     this.activeSessionId = sessionId;
     const startTime = Date.now();
@@ -668,7 +852,7 @@ export class Backend extends EventEmitter {
     //    如果平台层并发调用 chat()，历史中会出现连续两条 role: "user" 的消息。
     //    部分 LLM API（如 Gemini）不允许同角色消息相邻，可能导致请求失败。
     //    平台层应自行实现并发控制或消息缓冲（参考 WXWorkPlatform 的实现）。
-    const storedHistory = await this.storage.getHistory(sessionId);
+    let storedHistory = await this.storage.getHistory(sessionId);
 
     // 1.1 兜底清理：修复因中断/崩溃导致的不完整历史（dangling functionCall 等）
     const beforeSanitize = storedHistory.length;
@@ -683,6 +867,25 @@ export class Backend extends EventEmitter {
         await this.storage.addMessage(sessionId, msg);
       }
       logger.info(`历史兜底清理: session=${sessionId}, ${beforeSanitize} → ${storedHistory.length} 条`);
+    }
+
+    // 1.2 自动上下文压缩（pre-message）：上一轮 token 总量 + 本轮用户消息估算值 > 阈值 → 先压缩
+    const autoThreshold = this.getAutoSummaryThreshold();
+    if (autoThreshold && storedHistory.length > 0) {
+      const lastTokens = this.lastSessionTokens.get(sessionId) ?? 0;
+      if (lastTokens > 0) {
+        const estUser = estimateTokenCount(extractText(storedUserParts) || '');
+        if (lastTokens + estUser > autoThreshold) {
+          logger.info(`Auto-compact (pre-message): ${lastTokens} + ${estUser} > ${autoThreshold}`);
+          try {
+            const summaryText = await this.summarize(sessionId, signal);
+            this.emit('auto-compact', sessionId, summaryText);
+            storedHistory = await this.storage.getHistory(sessionId);
+          } catch (err) {
+            logger.warn('Auto-compact (pre-message) failed:', err);
+          }
+        }
+      }
     }
 
     const history = this.prepareHistoryForLLM(storedHistory);
@@ -719,10 +922,12 @@ export class Backend extends EventEmitter {
     }
 
     // 3. 构建 LLM 调用函数
+    let lastCallTotalTokens = 0;
     const callLLM: LLMCaller = async (request, modelName, callSignal) => {
       let content: Content;
       if (this.stream) {
         content = await this.callLLMStream(sessionId, request, modelName, callSignal);
+        if (content.usageMetadata?.totalTokenCount) lastCallTotalTokens = content.usageMetadata.totalTokenCount;
         // 让 stream:end 的 SSE 数据在 assistant:content 之前到达浏览器，
         // 使客户端有机会在 onStreamEnd 中 flush 流式文本并触发渲染，
         // 再收到 onAssistantContent 设置 receivedFinalAssistantPayload。
@@ -735,9 +940,9 @@ export class Backend extends EventEmitter {
         if (response.usageMetadata) {
           content.usageMetadata = response.usageMetadata;
           this.emit('usage', sessionId, response.usageMetadata);
+          if (response.usageMetadata.totalTokenCount) lastCallTotalTokens = response.usageMetadata.totalTokenCount;
         }
       }
-      this.emit('assistant:content', sessionId, content);
       return content;
     };
 
@@ -765,14 +970,33 @@ export class Backend extends EventEmitter {
     });
     if (isNewSession) {
       await this.updateSessionMeta(sessionId, storedUserParts, true);
+      for (const hook of this.pluginHooks) {
+        try {
+          await hook.onSessionCreate?.({ sessionId });
+        } catch (err) {
+          logger.warn(`插件钩子 "${hook.name}" onSessionCreate 执行失败:`, err);
+        }
+      }
     }
     // 通知前端用户消息的估算 token 数
     if (estimatedUserTokens > 0) this.emit('user:token', sessionId, estimatedUserTokens);
+    // 追踪用户消息 token 到 session 累计值
+    this.lastSessionTokens.set(sessionId, (this.lastSessionTokens.get(sessionId) ?? 0) + estimatedUserTokens);
 
     // 6. 执行工具循环（新增消息通过回调实时持久化；redo 已在步骤 5 清空，无需重复清）
     const result = await loop.run(history, callLLM, {
       extraParts,
       onMessageAppend: (content) => this.storage.addMessage(sessionId, content),
+      // 上游 main 新增：模型输出完成后通知平台层
+      onModelContent: (content) => { this.emit('assistant:content', sessionId, content); },
+      // feat 分支新增：MCP 附件单独旁路给平台层
+      // 文本继续走原有 tool loop / history 流程，
+      // 图片等二进制内容直接由 Telegram / Discord / Lark 等平台发送，
+      // 这样不会把 base64 图片带进历史，也不会撑爆上下文。
+      onAttachments: (attachments) => {
+        logger.info(`[handleMessage] onAttachments 回调触发: sessionId=${sessionId}, count=${attachments.length}, types=${attachments.map(a => `${a.type}(${a.data.length}B)`).join(',')}`);
+        this.emit('attachments', sessionId, attachments);
+      },
       signal,
       onRetry: (attempt, maxRetries, error) => {
         this.emit('retry', sessionId, attempt, maxRetries, error);
@@ -849,6 +1073,20 @@ export class Backend extends EventEmitter {
       this.emit('response', sessionId, finalText);
     }
     this.emit('done', sessionId, durationMs);
+
+    // 11. 更新 session token 追踪；若超阈值则自动压缩（为下一轮准备）
+    if (lastCallTotalTokens > 0) {
+      this.lastSessionTokens.set(sessionId, lastCallTotalTokens);
+    }
+    if (autoThreshold && lastCallTotalTokens > autoThreshold) {
+      logger.info(`Auto-compact (post-response): ${lastCallTotalTokens} > ${autoThreshold}`);
+      try {
+        const summaryText = await this.summarize(sessionId);
+        this.emit('auto-compact', sessionId, summaryText);
+      } catch (err) {
+        logger.warn('Auto-compact (post-response) failed:', err);
+      }
+    }
 
     this.activeSessionId = undefined;
   }
@@ -1104,7 +1342,17 @@ export class Backend extends EventEmitter {
   }
 
   private prepareHistoryForLLM(history: Content[]): Content[] {
-    const prepared = history.map((content) => ({
+    // 从最后一条总结消息开始加载上下文，跳过更早的历史
+    let startIndex = 0;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].isSummary) {
+        startIndex = i;
+        break;
+      }
+    }
+    const relevantHistory = startIndex > 0 ? history.slice(startIndex) : history;
+
+    const prepared = relevantHistory.map((content) => ({
       role: content.role,
       parts: this.preparePartsForLLM(content.parts),
       usageMetadata: content.usageMetadata,

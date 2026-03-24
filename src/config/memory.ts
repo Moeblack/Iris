@@ -7,9 +7,12 @@ import { memoryDbPath } from '../paths';
 import type { AgentPaths } from '../paths';
 
 export function parseMemoryConfig(raw: any, agentPaths?: AgentPaths): MemoryConfig {
-  if (!raw) return { enabled: false };
+  if (!raw) return { enabled: false, type: 'sqlite' };
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   return {
-    enabled: raw.enabled ?? false,
-    dbPath: raw.dbPath ?? agentPaths?.memoryDbPath ?? memoryDbPath,
+    ...source,
+    enabled: source.enabled ?? false,
+    type: typeof source.type === 'string' ? source.type : 'sqlite',
+    dbPath: source.dbPath ?? agentPaths?.memoryDbPath ?? memoryDbPath,
   };
 }

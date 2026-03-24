@@ -32,108 +32,48 @@ interface CreatePlatformsOptions {
 async function createPlatforms(
   result: BootstrapResult,
   options?: CreatePlatformsOptions,
-): Promise<{ platforms: PlatformAdapter[]; webPlatformRef?: WebPlatformType }> {
-  const { backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings } = result;
-  const currentModel = router.getCurrentModelInfo();
-  const defaultMode = config.system.defaultMode ?? 'default';
+): Promise<{ platforms: PlatformAdapter[]; platformMap: Map<string, PlatformAdapter>; webPlatformRef?: WebPlatformType }> {
+  const { backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings, platformRegistry, agentName, eventBus } = result;
 
   const platforms: PlatformAdapter[] = [];
+  const platformMap = new Map<string, PlatformAdapter>();
   let webPlatformRef: WebPlatformType | undefined;
 
   for (const platformType of config.platform.types) {
     if (options?.excludeConsole && platformType === 'console') continue;
     if (options?.excludeWeb && platformType === 'web') continue;
 
-    switch (platformType) {
-      case 'discord': {
-        const { DiscordPlatform } = await import('./platforms/discord');
-        platforms.push(new DiscordPlatform(backend, { token: config.platform.discord.token }));
-        break;
-      }
-      case 'telegram': {
-        const { TelegramPlatform } = await import('./platforms/telegram');
-        platforms.push(new TelegramPlatform(backend, {
-          token: config.platform.telegram.token,
-          showToolStatus: config.platform.telegram.showToolStatus,
-          groupMentionRequired: config.platform.telegram.groupMentionRequired,
-        }));
-        break;
-      }
-      case 'web': {
-        const { WebPlatform } = await import('./platforms/web');
-        const webPlatform = new WebPlatform(backend, {
-          port: config.platform.web.port,
-          host: config.platform.web.host,
-          authToken: config.platform.web.authToken,
-          managementToken: config.platform.web.managementToken,
-          configPath: configDir,
-          provider: currentModel.provider,
-          modelId: currentModel.modelId,
-          streamEnabled: config.system.stream,
-        });
-        const mcpMgr = getMCPManager();
-        if (mcpMgr) webPlatform.setMCPManager(mcpMgr);
-        webPlatformRef = webPlatform;
-        platforms.push(webPlatform);
-        break;
-      }
-      case 'wxwork': {
-        const { WXWorkPlatform } = await import('./platforms/wxwork');
-        platforms.push(new WXWorkPlatform(backend, {
-          botId: config.platform.wxwork.botId,
-          secret: config.platform.wxwork.secret,
-          showToolStatus: config.platform.wxwork.showToolStatus,
-        }));
-        break;
-      }
-      case 'qq': {
-        const { QQPlatform } = await import('./platforms/qq');
-        platforms.push(new QQPlatform(backend, {
-          wsUrl: config.platform.qq.wsUrl,
-          accessToken: config.platform.qq.accessToken,
-          selfId: config.platform.qq.selfId,
-          groupMode: config.platform.qq.groupMode,
-          showToolStatus: config.platform.qq.showToolStatus,
-        }));
-        break;
-      }
-      case 'lark': {
-        const { LarkPlatform } = await import('./platforms/lark');
-        platforms.push(new LarkPlatform(backend, {
-          appId: config.platform.lark.appId,
-          appSecret: config.platform.lark.appSecret,
-          showToolStatus: config.platform.lark.showToolStatus,
-        }));
-        break;
-      }
-      case 'console': {
-        if (typeof (globalThis as any).Bun === 'undefined') {
-          console.error(
-            '[Iris] Console 平台需要 Bun 运行时。\n' +
-            '  - 请优先使用: bun run dev\n' +
-            '  - 或直接执行: bun src/index.ts\n' +
-            '  - 或切换到其他平台（如 web）'
-          );
-          process.exit(1);
-        }
-        const { ConsolePlatform } = await import('./platforms/console');
-        platforms.push(new ConsolePlatform(backend, {
-          modeName: defaultMode,
-          modelName: currentModel.modelName,
-          modelId: currentModel.modelId,
-          contextWindow: currentModel.contextWindow,
-          configDir,
-          getMCPManager,
-          setMCPManager: (manager?: MCPManager) => { setMCPManager(manager); },
-          computerEnv,
-          initWarnings,
-        }));
-        break;
-      }
+    if (!platformRegistry.has(platformType)) {
+      console.error(`[Iris] 未注册的平台类型: ${platformType}`);
+      continue;
     }
+
+    const platform = await platformRegistry.create(platformType, {
+      backend,
+      config,
+      configDir,
+      router,
+      getMCPManager,
+      setMCPManager: (manager?: MCPManager) => { setMCPManager(manager); },
+      agentName,
+      extensions: result.extensions,
+      computerEnv,
+      initWarnings,
+      eventBus,
+    });
+
+    if (platformType === 'web') {
+      webPlatformRef = platform as WebPlatformType;
+    }
+    if (platformType === 'web' && webPlatformRef) {
+      // 将 WebPlatform.registerRoute 绑定到 IrisAPI.registerWebRoute
+      result.bindWebRouteRegistration(webPlatformRef.registerRoute.bind(webPlatformRef));
+    }
+    platforms.push(platform);
+    platformMap.set(platformType, platform);
   }
 
-  return { platforms, webPlatformRef };
+  return { platforms, platformMap, webPlatformRef };
 }
 
 // ============ 单 Agent 模式（原有逻辑） ============
@@ -142,7 +82,7 @@ async function runSingleAgent(): Promise<void> {
   const result = await bootstrap();
   const { getMCPManager } = result;
 
-  let { platforms, webPlatformRef } = await createPlatforms(result);
+  let { platforms, platformMap, webPlatformRef } = await createPlatforms(result);
   let activePlatforms = platforms;
 
   if (activePlatforms.length === 0) {
@@ -190,6 +130,11 @@ async function runSingleAgent(): Promise<void> {
       // 更新活跃平台列表（保留 web 平台 + 新的非 web 平台）
       activePlatforms = [webPlatformRef!, ...rebuilt.platforms];
     });
+  }
+
+  // 通知插件平台已创建完成
+  if (result.pluginManager) {
+    await result.pluginManager.notifyPlatformsReady(platformMap);
   }
 
   await Promise.all(activePlatforms.map(p => p.start()));
@@ -254,7 +199,7 @@ async function runMultiAgent(): Promise<void> {
         provider: currentModel.provider,
         modelId: currentModel.modelId,
         streamEnabled: result.config.system.stream,
-      });
+      }, { llmProviders: result.extensions.llmProviders, ocrProviders: result.extensions.ocrProviders });
       break;
     }
   }
@@ -275,7 +220,12 @@ async function runMultiAgent(): Promise<void> {
         provider: currentModel.provider,
         modelId: currentModel.modelId,
         streamEnabled: result.config.system.stream,
-      }, displayName, () => result.getMCPManager(), (mgr?) => result.setMCPManager(mgr));
+      },
+      displayName,
+      () => result.getMCPManager(),
+      (mgr?) => result.setMCPManager(mgr),
+      { llmProviders: result.extensions.llmProviders, ocrProviders: result.extensions.ocrProviders },
+      );
       // 注入 Computer Use 热重载引用
       let _cuEnv = result.computerEnv;
       sharedWebPlatform.setComputerEnvHandlers(
@@ -299,8 +249,12 @@ async function runMultiAgent(): Promise<void> {
   // 创建其他非 Console/非 Web 平台
   for (const def of agentDefs) {
     const result = bootstrapCache.get(def.name)!;
-    const { platforms } = await createPlatforms(result, { excludeConsole: true, excludeWeb: true });
+    const { platforms, platformMap } = await createPlatforms(result, { excludeConsole: true, excludeWeb: true });
     allNonConsolePlatforms.push(...platforms);
+    // 通知该 Agent 的插件平台已创建完成
+    if (result.pluginManager) {
+      await result.pluginManager.notifyPlatformsReady(platformMap);
+    }
   }
 
   if (allNonConsolePlatforms.length > 0) {
@@ -374,11 +328,9 @@ async function startConsoleForAgent(
   result: BootstrapResult,
   agentName?: string,
 ): Promise<'exit' | 'switch-agent'> {
-  const { backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings } = result;
+  const { backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings, platformRegistry } = result;
   const currentModel = router.getCurrentModelInfo();
   const defaultMode = config.system.defaultMode ?? 'default';
-
-  const { ConsolePlatform } = await import('./platforms/console');
 
   let resolveAction: (action: 'exit' | 'switch-agent') => void;
   const promise = new Promise<'exit' | 'switch-agent'>((resolve) => {
@@ -386,14 +338,17 @@ async function startConsoleForAgent(
   });
 
   let resolved = false;
-  const consolePlatform = new ConsolePlatform(backend, {
-    modeName: defaultMode,
-    modelName: currentModel.modelName,
-    modelId: currentModel.modelId,
-    contextWindow: currentModel.contextWindow,
+  const consolePlatform = await platformRegistry.create('console', {
+    backend,
+    config: {
+      ...config,
+      system: { ...config.system, defaultMode },
+    },
     configDir,
+    router,
     getMCPManager,
     setMCPManager: (manager?: MCPManager) => { setMCPManager(manager); },
+    extensions: result.extensions,
     agentName,
     computerEnv,
     initWarnings,
@@ -402,7 +357,7 @@ async function startConsoleForAgent(
       consolePlatform.stop();
       resolveAction('switch-agent');
     },
-  });
+  }) as PlatformAdapter;
 
   const originalStop = consolePlatform.stop.bind(consolePlatform);
   consolePlatform.stop = async () => {

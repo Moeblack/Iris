@@ -5,15 +5,18 @@
  * 供启动和热重载时复用。
  */
 
-import { LLMProvider } from './providers/base';
+import type { LLMProviderLike } from './providers/base';
 import { createGeminiProvider } from './providers/gemini';
 import { createOpenAICompatibleProvider } from './providers/openai-compatible';
 import { createClaudeProvider } from './providers/claude';
 import { createOpenAIResponsesProvider } from './providers/openai-responses';
 import { LLMRouter } from './router';
 import { LLMConfig, LLMRegistryConfig } from '../config/types';
+import type { LLMProviderFactoryRegistry } from '../bootstrap/extensions';
 
-export function createLLMFromConfig(config: LLMConfig): LLMProvider {
+export function createLLMFromConfig(config: LLMConfig, registry?: Pick<LLMProviderFactoryRegistry, 'get'>): LLMProviderLike {
+  const registeredFactory = registry?.get(config.provider);
+  if (registeredFactory) return registeredFactory(config);
   switch (config.provider) {
     case 'openai-compatible':
       return createOpenAICompatibleProvider({
@@ -40,7 +43,6 @@ export function createLLMFromConfig(config: LLMConfig): LLMProvider {
         requestBody: config.requestBody,
       });
     case 'gemini':
-    default:
       return createGeminiProvider({
         apiKey: config.apiKey,
         model: config.model,
@@ -48,16 +50,18 @@ export function createLLMFromConfig(config: LLMConfig): LLMProvider {
         headers: config.headers,
         requestBody: config.requestBody,
       });
+    default:
+      throw new Error(`未注册的 LLM provider: ${config.provider}`);
   }
 }
 
 /** 根据模型池配置创建路由器 */
-export function createLLMRouter(config: LLMRegistryConfig, currentModelName?: string): LLMRouter {
+export function createLLMRouter(config: LLMRegistryConfig, currentModelName?: string, registry?: Pick<LLMProviderFactoryRegistry, 'get'>): LLMRouter {
   const router = new LLMRouter({
     defaultModelName: config.defaultModelName,
     models: config.models.map(model => ({
       modelName: model.modelName,
-      provider: createLLMFromConfig(model),
+      provider: createLLMFromConfig(model, registry),
       config: model,
     })),
   });

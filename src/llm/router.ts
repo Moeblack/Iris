@@ -4,7 +4,7 @@
  * 管理一组按 modelName 注册的模型，并维护当前活动模型。
  */
 
-import { LLMProvider } from './providers/base';
+import type { LLMProviderLike } from './providers/base';
 import { LLMRequest, LLMResponse, LLMStreamChunk } from '../types';
 import { LLMConfig } from '../config/types';
 
@@ -12,7 +12,7 @@ export type LLMModelName = string;
 
 export interface LLMRouterModel {
   modelName: LLMModelName;
-  provider: LLMProvider;
+  provider: LLMProviderLike;
   config: LLMConfig;
 }
 
@@ -32,7 +32,7 @@ export interface LLMRouterConfig {
 }
 
 export class LLMRouter {
-  private providers = new Map<LLMModelName, LLMProvider>();
+  private providers = new Map<LLMModelName, LLMProviderLike>();
   private configs = new Map<LLMModelName, LLMConfig>();
   private order: LLMModelName[] = [];
   private currentModelName: LLMModelName;
@@ -60,7 +60,36 @@ export class LLMRouter {
     return this.providers.has(modelName);
   }
 
-  resolve(modelName?: LLMModelName): LLMProvider {
+  /** 动态注册一个模型（供插件使用） */
+  registerModel(entry: LLMRouterModel): void {
+    if (this.providers.has(entry.modelName)) {
+      throw new Error(`LLM 模型名称重复: ${entry.modelName}`);
+    }
+    this.providers.set(entry.modelName, entry.provider);
+    this.configs.set(entry.modelName, entry.config);
+    this.order.push(entry.modelName);
+  }
+
+  /** 动态移除一个模型（供插件使用） */
+  unregisterModel(modelName: LLMModelName): boolean {
+    if (!this.providers.has(modelName)) {
+      return false;
+    }
+    if (this.providers.size <= 1) {
+      throw new Error('LLMRouter 至少需要保留一个模型');
+    }
+
+    this.providers.delete(modelName);
+    this.configs.delete(modelName);
+    this.order = this.order.filter(name => name !== modelName);
+
+    if (this.currentModelName === modelName) {
+      this.currentModelName = this.order[0];
+    }
+    return true;
+  }
+
+  resolve(modelName?: LLMModelName): LLMProviderLike {
     const targetName = modelName ?? this.currentModelName;
     const provider = this.providers.get(targetName);
     if (!provider) {

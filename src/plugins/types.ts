@@ -5,16 +5,31 @@
  * 由于插件与 Iris 在同一进程中运行，可以直接操作内部对象。
  */
 
-import type { ToolDefinition, ToolHandler, Part } from '../types';
+import type { ToolDefinition, ToolHandler, Part, Content, LLMRequest } from '../types';
 import type { ModeDefinition } from '../modes/types';
 import type { AppConfig } from '../config/types';
+import type { PatchDisposer } from './patch';
+import type { PluginEventBus } from './event-bus';
+import type { PluginManager } from './manager';
 import type { ToolRegistry } from '../tools/registry';
+import type { PlatformAdapter } from '../platforms/base';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
 import type { StorageProvider } from '../storage/base';
 import type { MemoryProvider } from '../memory/base';
 import type { LLMRouter } from '../llm/router';
 import type { Backend } from '../core/backend';
+import type { MCPManager } from '../mcp/manager';
+import type { Computer } from '../computer-use/types';
+import type { OCRProvider } from '../ocr';
+import type {
+  BootstrapExtensionRegistry,
+  LLMProviderFactory,
+  StorageFactory,
+  MemoryFactory,
+  OCRFactory,
+} from '../bootstrap/extensions';
+import type { PlatformFactory } from '../platforms/registry';
 
 // ============ 插件定义 ============
 
@@ -26,6 +41,13 @@ export interface IrisPlugin {
   version: string;
   /** 插件描述 */
   description?: string;
+
+  /**
+   * 插件预启动阶段。
+   * 在 Router / Storage / Memory / OCR / 平台创建前调用。
+   * 插件可在此阶段修改配置、注册 Provider 工厂、注册平台工厂。
+   */
+  preBootstrap?(context: PreBootstrapContext): Promise<void> | void;
 
   /**
    * 插件激活。
@@ -52,7 +74,7 @@ export interface IrisPlugin {
 export interface IrisAPI {
   /** Backend 实例（EventEmitter，可监听所有内部事件、调用所有方法） */
   backend: Backend;
-  /** LLM 路由器（切换模型、获取模型信息） */
+  /** LLM 路由器（切换模型、获取模型信息、动态注册/移除模型） */
   router: LLMRouter;
   /** 存储层（会话历史、元数据） */
   storage: StorageProvider;
@@ -64,6 +86,71 @@ export interface IrisAPI {
   modes: ModeRegistry;
   /** 提示词装配器（可直接修改系统提示词） */
   prompt: PromptAssembler;
+  /** 当前应用配置（只读） */
+  config: Readonly<AppConfig>;
+  /** MCP 管理器（可选，未配置 MCP 时为 undefined） */
+  mcpManager?: MCPManager;
+  /** Computer Use 环境实例（可选，未启用时为 undefined） */
+  computerEnv?: Computer;
+  /** OCR 服务（可选，未配置时为 undefined） */
+  ocrService?: OCRProvider;
+  /** 启动扩展注册表（Provider / Platform 工厂） */
+  extensions: BootstrapExtensionRegistry;
+
+  // ---- 插件高级能力 ----
+
+  /** 插件管理器（可查询其他插件信息） */
+  pluginManager: PluginManager;
+  /** 插件间共享事件总线 */
+  eventBus: PluginEventBus;
+
+  /**
+   * 安全地替换任意对象上的方法。返回 dispose 函数，调用后恢复原始方法。
+   * 支持链式叠加，多个插件可以对同一方法依次 patch。
+   *
+   * @example
+   *   const dispose = api.patchMethod(api.backend, 'chat', async (original, sid, text) => {
+   *     console.log('before chat');
+   *     return original(sid, text);
+   *   });
+   */
+  patchMethod: typeof import('./patch').patchMethod;
+  /** 替换类原型上的方法，影响所有实例 */
+  patchPrototype: typeof import('./patch').patchPrototype;
+  /** 向 Web 平台注册自定义 HTTP 路由（仅 Web 平台运行时可用） */
+  registerWebRoute?: (method: string, path: string, handler: (req: any, res: any, params: Record<string, string>) => Promise<void>) => void;
+}
+
+// ============ 预启动上下文 ============
+
+/**
+ * 预启动阶段上下文。
+ *
+ * 该阶段发生在核心依赖创建前。插件可在此阶段直接参与系统装配。
+ */
+export interface PreBootstrapContext {
+  /** 获取当前应用配置（只读视图；实际修改请使用 mutateConfig） */
+  getConfig(): Readonly<AppConfig>;
+  /** 直接修改最终生效的配置对象 */
+  mutateConfig(mutator: (config: AppConfig) => void): void;
+
+  /** 注册新的 LLM Provider 工厂 */
+  registerLLMProvider(name: string, factory: LLMProviderFactory): void;
+  /** 注册新的存储提供商工厂 */
+  registerStorageProvider(type: string, factory: StorageFactory): void;
+  /** 注册新的记忆提供商工厂 */
+  registerMemoryProvider(type: string, factory: MemoryFactory): void;
+  /** 注册新的 OCR Provider 工厂 */
+  registerOCRProvider(name: string, factory: OCRFactory): void;
+  /** 注册新的平台工厂 */
+  registerPlatform(name: string, factory: PlatformFactory): void;
+
+  /** 获取完整扩展注册表 */
+  getExtensions(): BootstrapExtensionRegistry;
+  /** 获取插件专属日志器 */
+  getLogger(tag?: string): PluginLogger;
+  /** 读取插件配置 */
+  getPluginConfig<T = Record<string, unknown>>(): T | undefined;
 }
 
 // ============ 插件上下文 ============
@@ -98,6 +185,8 @@ export interface PluginContext {
   getToolRegistry(): ToolRegistry;
   /** 获取 ModeRegistry 实例 */
   getModeRegistry(): ModeRegistry;
+  /** 获取 LLMRouter 实例（可切换模型、动态注册/移除模型） */
+  getRouter(): LLMRouter;
 
   // ---- 工具拦截 ----
 
@@ -126,6 +215,13 @@ export interface PluginContext {
 
   // ---- 工具方法 ----
 
+  /**
+   * 注册平台创建完成后的回调。
+   * 回调接收已创建的平台 Map（platformType → PlatformAdapter）和 IrisAPI。
+   * 可通过 api.patchMethod 修改任意平台实例的行为。
+   */
+  onPlatformsReady(callback: (platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>): void;
+
   /** 获取当前应用配置（只读） */
   getConfig(): Readonly<AppConfig>;
   /** 获取插件专属的日志器 */
@@ -149,6 +245,8 @@ export type ToolWrapper = (
 export interface PluginHook {
   /** 钩子名称（用于日志标识） */
   name: string;
+  /** 钩子优先级。数值越大越先执行。默认 0。 */
+  priority?: number;
 
   /**
    * 消息预处理：在用户消息发给 LLM 前调用。
@@ -178,6 +276,51 @@ export interface PluginHook {
     toolName: string;
     args: Record<string, unknown>;
   }): Promise<ToolExecInterception | undefined> | ToolExecInterception | undefined;
+
+  /**
+   * 工具执行后处理：在工具 handler 返回结果后调用。
+   * 返回 { result } 替换工具结果，返回 undefined 不修改。
+   */
+  onAfterToolExec?(params: {
+    toolName: string;
+    args: Record<string, unknown>;
+    result: unknown;
+    durationMs: number;
+  }): Promise<{ result: unknown } | undefined> | { result: unknown } | undefined;
+
+  /**
+   * LLM 请求发出前拦截：可修改完整的 LLM 请求体。
+   * 返回 { request } 替换请求，返回 undefined 不修改。
+   */
+  onBeforeLLMCall?(params: {
+    request: LLMRequest;
+    round: number;
+  }): Promise<{ request: LLMRequest } | undefined> | { request: LLMRequest } | undefined;
+
+  /**
+   * LLM 响应返回后拦截：在响应写入历史前调用。
+   * 返回 { content } 替换响应，返回 undefined 不修改。
+   */
+  onAfterLLMCall?(params: {
+    content: Content;
+    round: number;
+  }): Promise<{ content: Content } | undefined> | { content: Content } | undefined;
+
+  /**
+   * 会话创建时调用（首条消息到达新 session 时触发）。
+   * 仅通知，不可阻止。
+   */
+  onSessionCreate?(params: {
+    sessionId: string;
+  }): Promise<void> | void;
+
+  /**
+   * 会话清空时调用（clearSession / /clear 命令触发）。
+   * 仅通知，不可阻止。
+   */
+  onSessionClear?(params: {
+    sessionId: string;
+  }): Promise<void> | void;
 }
 
 /** 工具执行拦截结果 */
@@ -194,6 +337,41 @@ export type BeforeToolExecInterceptor = (
   toolName: string,
   args: Record<string, unknown>,
 ) => Promise<ToolExecInterception | undefined>;
+
+/**
+ * 工具执行后拦截器（内部使用）
+ *
+ * 由 Backend 从 PluginHook[] 组合生成，注入到 ToolLoopConfig。
+ * 返回 { result } 替换结果；返回 undefined 表示不修改。
+ */
+export type AfterToolExecInterceptor = (
+  toolName: string,
+  args: Record<string, unknown>,
+  result: unknown,
+  durationMs: number,
+) => Promise<{ result: unknown } | undefined>;
+
+/**
+ * LLM 请求前拦截器（内部使用）
+ *
+ * 由 Backend 从 PluginHook[] 组合生成，注入到 ToolLoopConfig。
+ * 返回 { request } 替换请求；返回 undefined 表示不修改。
+ */
+export type BeforeLLMCallInterceptor = (
+  request: LLMRequest,
+  round: number,
+) => Promise<{ request: LLMRequest } | undefined>;
+
+/**
+ * LLM 响应后拦截器（内部使用）
+ *
+ * 由 Backend 从 PluginHook[] 组合生成，注入到 ToolLoopConfig。
+ * 返回 { content } 替换内容；返回 undefined 表示不修改。
+ */
+export type AfterLLMCallInterceptor = (
+  content: Content,
+  round: number,
+) => Promise<{ content: Content } | undefined>;
 
 // ============ 日志 ============
 
@@ -212,6 +390,8 @@ export interface PluginEntry {
   name: string;
   type?: 'local' | 'npm';
   enabled?: boolean;
+  /** 插件优先级。数值越大越先加载、越先执行。默认 0。 */
+  priority?: number;
   config?: Record<string, unknown>;
 }
 
@@ -223,6 +403,7 @@ export interface LoadedPlugin {
   plugin: IrisPlugin;
   hooks: PluginHook[];
   readyCallbacks: Array<(api: IrisAPI) => void | Promise<void>>;
+  platformReadyCallbacks: Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>>;
 }
 
 /** 插件信息（公开查询用） */
@@ -232,5 +413,8 @@ export interface PluginInfo {
   description?: string;
   enabled: boolean;
   type: 'local' | 'npm' | 'inline';
+  priority: number;
   hookCount: number;
 }
+
+export type { PatchDisposer } from './patch';

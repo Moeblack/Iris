@@ -2,11 +2,16 @@
 # 插件配置
 #
 # 配置要加载的 Iris 插件。
-# 插件可以扩展工具、模式、钩子等功能。
+# 插件可以扩展工具、模式、钩子，也可以在 preBootstrap 阶段注册
+# 自定义 LLM / Storage / Memory / OCR Provider 与自定义平台。
 #
 # 插件来源：
 #   - local（默认）：从 ~/.iris/plugins/<name>/ 目录加载
 #   - npm：从 npm 包 iris-plugin-<name> 加载
+#
+# priority:
+#   - 数值越大越先执行
+#   - 影响 preBootstrap、activate、hook 链执行顺序
 #
 # 插件目录结构：
 #   ~/.iris/plugins/
@@ -19,6 +24,7 @@
 #   # 本地插件示例
 #   - name: my-tool
 #     enabled: true
+#     priority: 100
 #     config:
 #       apiKey: "sk-xxx"
 #
@@ -26,6 +32,7 @@
 #   - name: rag
 #     type: npm
 #     enabled: true
+#     priority: 50
 #
 #   # 禁用某个插件
 #   - name: some-plugin

@@ -1,7 +1,7 @@
 /**
  * 插件管理器
  *
- * 负责插件的发现、加载、激活和停用。
+ * 负责插件的发现、预加载、预启动、激活和停用。
  * 支持本地目录插件（~/.iris/plugins/）和 npm 包插件（iris-plugin-*）。
  */
 
@@ -14,78 +14,118 @@ import type { ToolRegistry } from '../tools/registry';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
 import type { AppConfig } from '../config/types';
+import type { LLMRouter } from '../llm/router';
+import type { BootstrapExtensionRegistry } from '../bootstrap/extensions';
 import type { IrisPlugin, PluginEntry, PluginHook, PluginInfo, LoadedPlugin, IrisAPI } from './types';
 import { PluginContextImpl } from './context';
+import { PreBootstrapContextImpl } from './prebootstrap-context';
+import type { PlatformAdapter } from '../platforms/base';
 
 const logger = createLogger('PluginManager');
 
 /** 插件目录 */
 export const pluginsDir = path.join(dataDir, 'plugins');
 
+interface PreparedPlugin {
+  entry: PluginEntry;
+  plugin: IrisPlugin;
+  pluginConfig?: Record<string, unknown>;
+}
+
+function byPriorityDesc<T extends { priority?: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
 export class PluginManager {
   private plugins = new Map<string, LoadedPlugin>();
+  private prepared: PreparedPlugin[] = [];
+  /** 在 notifyReady 中缓存 IrisAPI 引用，供 notifyPlatformsReady 使用 */
+  private _api?: IrisAPI;
 
   /**
-   * 加载所有配置中启用的插件。
-   * 在 bootstrap 中调用，位于 ToolRegistry/ModeRegistry/PromptAssembler 创建之后、Backend 创建之前。
+   * 预加载所有配置中启用的插件。
+   * 在 bootstrap 中调用，位于配置解析之后、核心对象创建之前。
    */
-  async loadAll(
-    entries: PluginEntry[],
-    internals: { tools: ToolRegistry; modes: ModeRegistry; prompt: PromptAssembler },
-    appConfig: AppConfig,
-  ): Promise<void> {
-    for (const entry of entries) {
+  async prepareAll(entries: PluginEntry[], appConfig: AppConfig): Promise<void> {
+    this.prepared = [];
+
+    for (const entry of byPriorityDesc(entries)) {
       if (entry.enabled === false) {
         logger.info(`插件 "${entry.name}" 已禁用，跳过`);
         continue;
       }
 
       try {
-        await this.load(entry, internals, appConfig);
+        const plugin = await this.resolvePlugin(entry);
+        const pluginConfig = this.loadPluginConfig(entry);
+        this.prepared.push({ entry, plugin, pluginConfig });
       } catch (err) {
-        logger.error(`插件 "${entry.name}" 加载失败:`, err);
+        logger.error(`插件 "${entry.name}" 预加载失败:`, err);
+      }
+    }
+
+    const loaded = this.prepared.length;
+    if (loaded > 0) {
+      logger.info(`已预加载 ${loaded} 个插件`);
+    }
+  }
+
+  /**
+   * 执行 PreBootstrap 阶段。
+   * 插件可在此阶段修改配置并注册 Provider / Platform 工厂。
+   */
+  async runPreBootstrap(appConfig: AppConfig, extensions: BootstrapExtensionRegistry): Promise<void> {
+    for (const prepared of this.prepared) {
+      if (typeof prepared.plugin.preBootstrap !== 'function') continue;
+
+      try {
+        const context = new PreBootstrapContextImpl(
+          prepared.entry.name,
+          appConfig,
+          extensions,
+          prepared.pluginConfig,
+        );
+        await prepared.plugin.preBootstrap(context);
+        logger.info(`插件 "${prepared.plugin.name}@${prepared.plugin.version}" 已完成 preBootstrap`);
+      } catch (err) {
+        logger.error(`插件 "${prepared.entry.name}" preBootstrap 执行失败:`, err);
+      }
+    }
+  }
+
+  /**
+   * 激活全部已预加载插件。
+   * 在 bootstrap 中调用，位于 ToolRegistry/ModeRegistry/PromptAssembler 创建之后、Backend 创建之前。
+   */
+  async activateAll(
+    internals: { tools: ToolRegistry; modes: ModeRegistry; prompt: PromptAssembler; router: LLMRouter },
+    appConfig: AppConfig,
+  ): Promise<void> {
+    for (const prepared of this.prepared) {
+      try {
+        await this.activatePrepared(prepared, internals, appConfig);
+      } catch (err) {
+        logger.error(`插件 "${prepared.entry.name}" 激活失败:`, err);
       }
     }
 
     const loaded = this.plugins.size;
     if (loaded > 0) {
-      logger.info(`已加载 ${loaded} 个插件`);
+      logger.info(`已激活 ${loaded} 个插件`);
     }
   }
 
-  /** 加载并激活单个插件 */
-  async load(
-    entry: PluginEntry,
-    internals: { tools: ToolRegistry; modes: ModeRegistry; prompt: PromptAssembler },
+  /**
+   * 兼容旧调用：一次性完成预加载与激活。
+   * 建议新代码使用 prepareAll + runPreBootstrap + activateAll。
+   */
+  async loadAll(
+    entries: PluginEntry[],
+    internals: { tools: ToolRegistry; modes: ModeRegistry; prompt: PromptAssembler; router: LLMRouter },
     appConfig: AppConfig,
   ): Promise<void> {
-    if (this.plugins.has(entry.name)) {
-      logger.warn(`插件 "${entry.name}" 已加载，跳过重复注册`);
-      return;
-    }
-
-    const plugin = await this.resolvePlugin(entry);
-    const pluginConfig = this.loadPluginConfig(entry);
-
-    const context = new PluginContextImpl(
-      entry.name,
-      internals.tools,
-      internals.modes,
-      appConfig,
-      internals.prompt,
-      pluginConfig,
-    );
-
-    await plugin.activate(context);
-
-    this.plugins.set(entry.name, {
-      entry,
-      plugin,
-      hooks: context.getHooks(),
-      readyCallbacks: context.getReadyCallbacks(),
-    });
-
-    logger.info(`插件 "${plugin.name}@${plugin.version}" 已激活`);
+    await this.prepareAll(entries, appConfig);
+    await this.activateAll(internals, appConfig);
   }
 
   /**
@@ -93,12 +133,32 @@ export class PluginManager {
    * 依次调用各插件通过 ctx.onReady() 注册的回调，传递完整的内部 API。
    */
   async notifyReady(api: IrisAPI): Promise<void> {
-    for (const [name, loaded] of this.plugins) {
+    this._api = api;
+    for (const loaded of byPriorityDesc(Array.from(this.plugins.values()).map(item => item.entry)).map(entry => this.plugins.get(entry.name)!).filter(Boolean)) {
       for (const callback of loaded.readyCallbacks) {
         try {
           await callback(api);
         } catch (err) {
-          logger.error(`插件 "${name}" onReady 回调执行失败:`, err);
+          logger.error(`插件 "${loaded.entry.name}" onReady 回调执行失败:`, err);
+        }
+      }
+    }
+  }
+
+  /**
+   * 通知所有插件平台已创建完成。
+   * 在 createPlatforms() 之后调用，传递已创建的平台 Map。
+   */
+  async notifyPlatformsReady(platforms: ReadonlyMap<string, PlatformAdapter>): Promise<void> {
+    if (!this._api) return;
+    for (const loaded of byPriorityDesc(
+      Array.from(this.plugins.values()).map(item => item.entry),
+    ).map(entry => this.plugins.get(entry.name)!).filter(Boolean)) {
+      for (const callback of loaded.platformReadyCallbacks) {
+        try {
+          await callback(platforms, this._api);
+        } catch (err) {
+          logger.error(`插件 "${loaded.entry.name}" onPlatformsReady 回调执行失败:`, err);
         }
       }
     }
@@ -115,6 +175,7 @@ export class PluginManager {
       }
     }
     this.plugins.clear();
+    this.prepared = [];
   }
 
   /** 获取所有已加载插件注册的钩子 */
@@ -123,7 +184,7 @@ export class PluginManager {
     for (const loaded of this.plugins.values()) {
       hooks.push(...loaded.hooks);
     }
-    return hooks;
+    return hooks.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
   }
 
   /** 列出已加载的插件信息 */
@@ -134,6 +195,7 @@ export class PluginManager {
       description: plugin.description,
       enabled: true,
       type: entry.type ?? 'local',
+      priority: entry.priority ?? 0,
       hookCount: hooks.length,
     }));
   }
@@ -144,6 +206,39 @@ export class PluginManager {
   }
 
   // ============ 私有方法 ============
+
+  private async activatePrepared(
+    prepared: PreparedPlugin,
+    internals: { tools: ToolRegistry; modes: ModeRegistry; prompt: PromptAssembler; router: LLMRouter },
+    appConfig: AppConfig,
+  ): Promise<void> {
+    if (this.plugins.has(prepared.entry.name)) {
+      logger.warn(`插件 "${prepared.entry.name}" 已激活，跳过重复注册`);
+      return;
+    }
+
+    const context = new PluginContextImpl(
+      prepared.entry.name,
+      internals.tools,
+      internals.modes,
+      internals.router,
+      appConfig,
+      internals.prompt,
+      prepared.pluginConfig,
+    );
+
+    await prepared.plugin.activate(context);
+
+    this.plugins.set(prepared.entry.name, {
+      entry: prepared.entry,
+      plugin: prepared.plugin,
+      hooks: context.getHooks(),
+      readyCallbacks: context.getReadyCallbacks(),
+      platformReadyCallbacks: context.getPlatformReadyCallbacks(),
+    });
+
+    logger.info(`插件 "${prepared.plugin.name}@${prepared.plugin.version}" 已激活`);
+  }
 
   private async resolvePlugin(entry: PluginEntry): Promise<IrisPlugin> {
     const type = entry.type ?? 'local';

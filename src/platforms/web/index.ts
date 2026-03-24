@@ -31,8 +31,11 @@ import type { AgentDefinition } from '../../agents';
 import { Content, Part, isThoughtTextPart } from '../../types';
 import { formatContent, formatMessages } from './message-format';
 import { createTerminalHandler, type TerminalHandler } from './handlers/terminal';
+import type { BootstrapExtensionRegistry } from '../../bootstrap/extensions';
 
 const logger = createLogger('WebPlatform');
+
+type RuntimeReloadExtensions = Pick<BootstrapExtensionRegistry, 'llmProviders' | 'ocrProviders'>;
 
 export interface WebPlatformConfig {
   port: number;
@@ -57,6 +60,7 @@ export interface AgentContext {
   setMCPManager: (mgr?: MCPManager) => void;
   getComputerEnv?: () => import('../../computer-use/types').Computer | undefined;
   setComputerEnv?: (env?: import('../../computer-use/types').Computer) => void;
+  extensions?: RuntimeReloadExtensions;
 }
 
 /** MIME 类型映射 */
@@ -127,7 +131,7 @@ export class WebPlatform extends PlatformAdapter {
   /** 追踪 wireBackendEvents 绑定的监听器，以便精确移除而不影响其他平台 */
   private backendListenerCleanups = new Map<string, () => void>();
 
-  constructor(backend: Backend, config: WebPlatformConfig) {
+  constructor(backend: Backend, config: WebPlatformConfig, extensions?: RuntimeReloadExtensions) {
     super();
     this.config = config;
     this.router = new Router();
@@ -138,6 +142,7 @@ export class WebPlatform extends PlatformAdapter {
       name: 'default', backend, config,
       getMCPManager: () => _mcpManager,
       setMCPManager: (mgr?) => { _mcpManager = mgr; },
+      extensions,
     });
     this.setupRoutes();
     this.deployToken = crypto.randomBytes(16).toString('hex');
@@ -162,6 +167,7 @@ export class WebPlatform extends PlatformAdapter {
     name: string, backend: Backend, config: WebPlatformConfig, description?: string,
     getMCPManager?: () => MCPManager | undefined,
     setMCPManager?: (mgr?: MCPManager) => void,
+    extensions?: RuntimeReloadExtensions,
   ): void {
     // 移除构造函数创建的占位 default agent
     if (this.defaultAgentName === 'default' && this.agents.has('default') && name !== 'default') {
@@ -172,6 +178,7 @@ export class WebPlatform extends PlatformAdapter {
       name, description, backend, config,
       getMCPManager: getMCPManager ?? (() => undefined),
       setMCPManager: setMCPManager ?? (() => {}),
+      extensions,
     });
   }
 
@@ -249,6 +256,7 @@ export class WebPlatform extends PlatformAdapter {
         },
         getMCPManager: () => _mcpManager,
         setMCPManager: (mgr?) => { _mcpManager = mgr; },
+        extensions: { llmProviders: result.extensions.llmProviders, ocrProviders: result.extensions.ocrProviders },
       });
       this.wireBackendEvents(result.backend, name);
     };
@@ -574,6 +582,14 @@ export class WebPlatform extends PlatformAdapter {
     }
   }
 
+  /**
+   * 向 Web 服务注册自定义 HTTP 路由。
+   * 供插件通过 IrisAPI.registerWebRoute 调用。
+   */
+  registerRoute(method: string, path: string, handler: (req: any, res: any, params: Record<string, string>) => Promise<void>): void {
+    this.router.add(method.toUpperCase(), path, handler);
+  }
+
   private setupRoutes(): void {
     const { configPath } = this.config;
 
@@ -719,6 +735,7 @@ export class WebPlatform extends PlatformAdapter {
             setMCPManager: agent.setMCPManager,
             getComputerEnv: agent.getComputerEnv,
             setComputerEnv: agent.setComputerEnv,
+            extensions: agent.extensions,
           },
           mergedConfig,
         );

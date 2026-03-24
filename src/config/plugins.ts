@@ -8,6 +8,7 @@
  *     - name: my-tool
  *       type: local        # local | npm，默认 local
  *       enabled: true      # 默认 true
+ *       priority: 100      # 可选，数值越大越先执行
  *       config:            # 可选，覆盖插件自身的 config.yaml
  *         apiKey: "xxx"
  */
@@ -34,6 +35,7 @@ export function parsePluginsConfig(raw: any): PluginEntry[] | undefined {
       name: item.name,
       type: item.type === 'npm' ? 'npm' : 'local',
       enabled: item.enabled !== false,
+      priority: typeof item.priority === 'number' ? item.priority : undefined,
       config: item.config && typeof item.config === 'object' ? item.config : undefined,
     });
   }

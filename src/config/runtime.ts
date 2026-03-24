@@ -4,7 +4,7 @@
 
 import { Backend } from '../core/backend';
 import { createLLMRouter } from '../llm/factory';
-import { OCRService } from '../ocr';
+import { OCRService, type OCRProvider } from '../ocr';
 import { parseLLMConfig } from './llm';
 import { parseOCRConfig } from './ocr';
 import { parseToolsConfig } from './tools';
@@ -13,6 +13,7 @@ import { DEFAULT_SYSTEM_PROMPT } from '../prompt/templates/default';
 import { createMCPManager, MCPManager } from '../mcp';
 import { ToolRegistry } from '../tools/registry';
 import type { Computer } from '../computer-use/types';
+import type { BootstrapExtensionRegistry } from '../bootstrap/extensions';
 
 export interface RuntimeConfigReloadContext {
   backend: Backend;
@@ -20,6 +21,7 @@ export interface RuntimeConfigReloadContext {
   setMCPManager(manager?: MCPManager): void;
   getComputerEnv?(): Computer | undefined;
   setComputerEnv?(env?: Computer): void;
+  extensions?: Pick<BootstrapExtensionRegistry, 'llmProviders' | 'ocrProviders'>;
 }
 
 export interface RuntimeConfigSummary {
@@ -38,6 +40,24 @@ function unregisterOldMcpTools(tools: ToolRegistry): void {
   }
 }
 
+async function createReloadOCRProvider(
+  context: RuntimeConfigReloadContext,
+  ocrConfig: ReturnType<typeof parseOCRConfig>,
+): Promise<OCRProvider | undefined> {
+  if (!ocrConfig) return undefined;
+
+  const registeredFactory = context.extensions?.ocrProviders.get(ocrConfig.provider);
+  if (registeredFactory) {
+    return await registeredFactory(ocrConfig);
+  }
+
+  if (ocrConfig.provider === 'openai-compatible') {
+    return new OCRService(ocrConfig);
+  }
+
+  throw new Error(`未注册的 OCR provider: ${ocrConfig.provider}`);
+}
+
 export async function applyRuntimeConfigReload(
   context: RuntimeConfigReloadContext,
   mergedConfig: any,
@@ -46,7 +66,7 @@ export async function applyRuntimeConfigReload(
   const ocrConfig = parseOCRConfig(mergedConfig.ocr);
   const toolsConfig = parseToolsConfig(mergedConfig.tools);
   const previousModelName = context.backend.getCurrentModelName();
-  const newRouter = createLLMRouter(llmConfig, previousModelName);
+  const newRouter = createLLMRouter(llmConfig, previousModelName, context.extensions?.llmProviders);
   const currentModel = newRouter.getCurrentModelInfo();
 
   context.backend.reloadLLM(newRouter);
@@ -58,7 +78,7 @@ export async function applyRuntimeConfigReload(
     toolsConfig,
     systemPrompt: mergedConfig.system?.systemPrompt || DEFAULT_SYSTEM_PROMPT,
     currentLLMConfig: newRouter.getCurrentConfig(),
-    ocrService: ocrConfig ? new OCRService(ocrConfig) : undefined,
+    ocrService: await createReloadOCRProvider(context, ocrConfig),
   });
 
   const tools = context.backend.getTools();
