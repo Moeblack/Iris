@@ -19,7 +19,7 @@ import type { BootstrapExtensionRegistry } from '../bootstrap/extensions';
 import type { IrisPlugin, PluginEntry, PluginHook, PluginInfo, LoadedPlugin, IrisAPI } from './types';
 import { PluginContextImpl } from './context';
 import { PreBootstrapContextImpl } from './prebootstrap-context';
-import { PluginCommandRegistry } from './command-registry';
+import type { PlatformAdapter } from '../platforms/base';
 
 const logger = createLogger('PluginManager');
 
@@ -39,7 +39,8 @@ function byPriorityDesc<T extends { priority?: number }>(items: T[]): T[] {
 export class PluginManager {
   private plugins = new Map<string, LoadedPlugin>();
   private prepared: PreparedPlugin[] = [];
-  private _commandRegistry = new PluginCommandRegistry();
+  /** 在 notifyReady 中缓存 IrisAPI 引用，供 notifyPlatformsReady 使用 */
+  private _api?: IrisAPI;
 
   /**
    * 预加载所有配置中启用的插件。
@@ -132,12 +133,32 @@ export class PluginManager {
    * 依次调用各插件通过 ctx.onReady() 注册的回调，传递完整的内部 API。
    */
   async notifyReady(api: IrisAPI): Promise<void> {
+    this._api = api;
     for (const loaded of byPriorityDesc(Array.from(this.plugins.values()).map(item => item.entry)).map(entry => this.plugins.get(entry.name)!).filter(Boolean)) {
       for (const callback of loaded.readyCallbacks) {
         try {
           await callback(api);
         } catch (err) {
           logger.error(`插件 "${loaded.entry.name}" onReady 回调执行失败:`, err);
+        }
+      }
+    }
+  }
+
+  /**
+   * 通知所有插件平台已创建完成。
+   * 在 createPlatforms() 之后调用，传递已创建的平台 Map。
+   */
+  async notifyPlatformsReady(platforms: ReadonlyMap<string, PlatformAdapter>): Promise<void> {
+    if (!this._api) return;
+    for (const loaded of byPriorityDesc(
+      Array.from(this.plugins.values()).map(item => item.entry),
+    ).map(entry => this.plugins.get(entry.name)!).filter(Boolean)) {
+      for (const callback of loaded.platformReadyCallbacks) {
+        try {
+          await callback(platforms, this._api);
+        } catch (err) {
+          logger.error(`插件 "${loaded.entry.name}" onPlatformsReady 回调执行失败:`, err);
         }
       }
     }
@@ -164,11 +185,6 @@ export class PluginManager {
       hooks.push(...loaded.hooks);
     }
     return hooks.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-  }
-
-  /** 获取自定义命令注册表 */
-  getCommandRegistry(): PluginCommandRegistry {
-    return this._commandRegistry;
   }
 
   /** 列出已加载的插件信息 */
@@ -213,16 +229,12 @@ export class PluginManager {
 
     await prepared.plugin.activate(context);
 
-    // 收集插件注册的命令
-    for (const cmd of context.getCommands()) {
-      this._commandRegistry.register(cmd);
-    }
-
     this.plugins.set(prepared.entry.name, {
       entry: prepared.entry,
       plugin: prepared.plugin,
       hooks: context.getHooks(),
       readyCallbacks: context.getReadyCallbacks(),
+      platformReadyCallbacks: context.getPlatformReadyCallbacks(),
     });
 
     logger.info(`插件 "${prepared.plugin.name}@${prepared.plugin.version}" 已激活`);

@@ -44,7 +44,6 @@ import { createBootstrapExtensionRegistry, type BootstrapExtensionRegistry } fro
 import type { PlatformRegistry } from './platforms/registry';
 import { PluginEventBus } from './plugins/event-bus';
 import { patchMethod, patchPrototype } from './plugins/patch';
-import type { PluginCommandRegistry } from './plugins/command-registry';
 import type { IrisAPI } from './plugins/types';
 
 export interface BootstrapResult {
@@ -71,8 +70,6 @@ export interface BootstrapResult {
   platformRegistry: PlatformRegistry;
   /** 插件间共享事件总线 */
   eventBus: PluginEventBus;
-  /** 自定义命令注册表 */
-  commandRegistry: PluginCommandRegistry | undefined;
   /** 绑定 Web 路由注册到 IrisAPI（在 WebPlatform 创建后调用） */
   bindWebRouteRegistration: (register: (method: string, path: string, handler: any) => void) => void;
 }
@@ -277,7 +274,6 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
 
   // 将插件钩子注入 Backend
   const eventBus = new PluginEventBus();
-  const commandRegistry = pluginManager?.getCommandRegistry();
 
   // 用一个可变引用存放 registerWebRoute，以便在 WebPlatform 创建后绑定到 IrisAPI
   const irisApiRef: Partial<IrisAPI> = {};
@@ -304,7 +300,6 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
       extensions,
       pluginManager,
       eventBus,
-      commands: pluginManager.getCommandRegistry(),
       patchMethod,
       patchPrototype,
       get registerWebRoute() { return irisApiRef.registerWebRoute; },
@@ -328,7 +323,6 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     extensions,
     platformRegistry: extensions.platforms,
     eventBus,
-    commandRegistry,
     bindWebRouteRegistration,
   };
 }

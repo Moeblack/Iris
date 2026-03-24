@@ -12,14 +12,14 @@ import type { ToolRegistry } from '../tools/registry';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
 import type { LLMRouter } from '../llm/router';
-import type { PluginContext, PluginHook, PluginLogger, ToolWrapper, IrisAPI, PluginCommand } from './types';
-import type { PluginCommandRegistry } from './command-registry';
+import type { PluginContext, PluginHook, PluginLogger, ToolWrapper, IrisAPI } from './types';
 import { createLogger } from '../logger';
+import type { PlatformAdapter } from '../platforms/base';
 
 export class PluginContextImpl implements PluginContext {
   private hooks: PluginHook[] = [];
   private readyCallbacks: Array<(api: IrisAPI) => void | Promise<void>> = [];
-  private commandCallbacks: PluginCommand[] = [];
+  private _platformReadyCallbacks: Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>> = [];
 
   constructor(
     private pluginName: string,
@@ -94,8 +94,8 @@ export class PluginContextImpl implements PluginContext {
     this.readyCallbacks.push(callback);
   }
 
-  registerCommand(command: PluginCommand): void {
-    this.commandCallbacks.push(command);
+  onPlatformsReady(callback: (platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>): void {
+    this._platformReadyCallbacks.push(callback);
   }
 
   // ---- 工具方法 ----
@@ -127,8 +127,8 @@ export class PluginContextImpl implements PluginContext {
     return this.readyCallbacks;
   }
 
-  /** 获取插件注册的命令 */
-  getCommands(): PluginCommand[] {
-    return this.commandCallbacks;
+  /** 获取插件注册的 onPlatformsReady 回调 */
+  getPlatformReadyCallbacks(): Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>> {
+    return this._platformReadyCallbacks;
   }
 }

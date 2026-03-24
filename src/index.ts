@@ -32,10 +32,11 @@ interface CreatePlatformsOptions {
 async function createPlatforms(
   result: BootstrapResult,
   options?: CreatePlatformsOptions,
-): Promise<{ platforms: PlatformAdapter[]; webPlatformRef?: WebPlatformType }> {
-  const { backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings, platformRegistry, agentName, commandRegistry, eventBus } = result;
+): Promise<{ platforms: PlatformAdapter[]; platformMap: Map<string, PlatformAdapter>; webPlatformRef?: WebPlatformType }> {
+  const { backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings, platformRegistry, agentName, eventBus } = result;
 
   const platforms: PlatformAdapter[] = [];
+  const platformMap = new Map<string, PlatformAdapter>();
   let webPlatformRef: WebPlatformType | undefined;
 
   for (const platformType of config.platform.types) {
@@ -58,7 +59,6 @@ async function createPlatforms(
       extensions: result.extensions,
       computerEnv,
       initWarnings,
-      commandRegistry,
       eventBus,
     });
 
@@ -70,9 +70,10 @@ async function createPlatforms(
       result.bindWebRouteRegistration(webPlatformRef.registerRoute.bind(webPlatformRef));
     }
     platforms.push(platform);
+    platformMap.set(platformType, platform);
   }
 
-  return { platforms, webPlatformRef };
+  return { platforms, platformMap, webPlatformRef };
 }
 
 // ============ 单 Agent 模式（原有逻辑） ============
@@ -81,7 +82,7 @@ async function runSingleAgent(): Promise<void> {
   const result = await bootstrap();
   const { getMCPManager } = result;
 
-  let { platforms, webPlatformRef } = await createPlatforms(result);
+  let { platforms, platformMap, webPlatformRef } = await createPlatforms(result);
   let activePlatforms = platforms;
 
   if (activePlatforms.length === 0) {
@@ -129,6 +130,11 @@ async function runSingleAgent(): Promise<void> {
       // 更新活跃平台列表（保留 web 平台 + 新的非 web 平台）
       activePlatforms = [webPlatformRef!, ...rebuilt.platforms];
     });
+  }
+
+  // 通知插件平台已创建完成
+  if (result.pluginManager) {
+    await result.pluginManager.notifyPlatformsReady(platformMap);
   }
 
   await Promise.all(activePlatforms.map(p => p.start()));
@@ -243,8 +249,12 @@ async function runMultiAgent(): Promise<void> {
   // 创建其他非 Console/非 Web 平台
   for (const def of agentDefs) {
     const result = bootstrapCache.get(def.name)!;
-    const { platforms } = await createPlatforms(result, { excludeConsole: true, excludeWeb: true });
+    const { platforms, platformMap } = await createPlatforms(result, { excludeConsole: true, excludeWeb: true });
     allNonConsolePlatforms.push(...platforms);
+    // 通知该 Agent 的插件平台已创建完成
+    if (result.pluginManager) {
+      await result.pluginManager.notifyPlatformsReady(platformMap);
+    }
   }
 
   if (allNonConsolePlatforms.length > 0) {

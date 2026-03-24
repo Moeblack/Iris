@@ -11,7 +11,6 @@ import type { MCPManager } from '../mcp';
 import type { Computer } from '../computer-use/types';
 import type { BootstrapExtensionRegistry } from '../bootstrap/extensions';
 import { PlatformAdapter } from './base';
-import type { PluginCommandRegistry } from '../plugins/command-registry';
 import type { PluginEventBus } from '../plugins/event-bus';
 
 export interface PlatformFactoryContext {
@@ -26,8 +25,6 @@ export interface PlatformFactoryContext {
   extensions: BootstrapExtensionRegistry;
   initWarnings: string[];
   onSwitchAgent?: () => void;
-  /** 插件自定义命令注册表 */
-  commandRegistry?: PluginCommandRegistry;
   /** 插件间共享事件总线 */
   eventBus?: PluginEventBus;
 }
@@ -133,7 +130,7 @@ export function createDefaultPlatformRegistry(): PlatformRegistry {
     });
   });
 
-  registry.register('console', async ({ backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings, agentName, onSwitchAgent, extensions, commandRegistry }) => {
+  registry.register('console', async ({ backend, config, configDir, router, getMCPManager, setMCPManager, computerEnv, initWarnings, agentName, onSwitchAgent, extensions }) => {
     if (typeof (globalThis as { Bun?: unknown }).Bun === 'undefined') {
       console.error(
         '[Iris] Console 平台需要 Bun 运行时。\n'
@@ -161,7 +158,6 @@ export function createDefaultPlatformRegistry(): PlatformRegistry {
       agentName,
       onSwitchAgent,
       extensions: { llmProviders: extensions.llmProviders, ocrProviders: extensions.ocrProviders },
-      commandRegistry,
     });
   });
 

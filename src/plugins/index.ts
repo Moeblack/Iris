@@ -29,7 +29,5 @@ export type {
 
 export { PluginManager } from './manager';
 export { PluginEventBus } from './event-bus';
-export { PluginCommandRegistry } from './command-registry';
-export type { PluginCommand, CommandContext } from './command-registry';
 export { patchMethod, patchPrototype } from './patch';
 export type { PatchDisposer } from './patch';

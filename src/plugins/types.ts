@@ -10,9 +10,9 @@ import type { ModeDefinition } from '../modes/types';
 import type { AppConfig } from '../config/types';
 import type { PatchDisposer } from './patch';
 import type { PluginEventBus } from './event-bus';
-import type { PluginCommandRegistry, PluginCommand, CommandContext } from './command-registry';
 import type { PluginManager } from './manager';
 import type { ToolRegistry } from '../tools/registry';
+import type { PlatformAdapter } from '../platforms/base';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
 import type { StorageProvider } from '../storage/base';
@@ -103,8 +103,6 @@ export interface IrisAPI {
   pluginManager: PluginManager;
   /** 插件间共享事件总线 */
   eventBus: PluginEventBus;
-  /** 自定义命令注册表 */
-  commands: PluginCommandRegistry;
 
   /**
    * 安全地替换任意对象上的方法。返回 dispose 函数，调用后恢复原始方法。
@@ -217,8 +215,12 @@ export interface PluginContext {
 
   // ---- 工具方法 ----
 
-  /** 注册自定义 slash 命令（所有平台通用） */
-  registerCommand(command: PluginCommand): void;
+  /**
+   * 注册平台创建完成后的回调。
+   * 回调接收已创建的平台 Map（platformType → PlatformAdapter）和 IrisAPI。
+   * 可通过 api.patchMethod 修改任意平台实例的行为。
+   */
+  onPlatformsReady(callback: (platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>): void;
 
   /** 获取当前应用配置（只读） */
   getConfig(): Readonly<AppConfig>;
@@ -401,6 +403,7 @@ export interface LoadedPlugin {
   plugin: IrisPlugin;
   hooks: PluginHook[];
   readyCallbacks: Array<(api: IrisAPI) => void | Promise<void>>;
+  platformReadyCallbacks: Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>>;
 }
 
 /** 插件信息（公开查询用） */
@@ -414,7 +417,4 @@ export interface PluginInfo {
   hookCount: number;
 }
 
-
-// re-export 供外部直接从 types 导入
-export type { PluginCommand, CommandContext } from './command-registry';
 export type { PatchDisposer } from './patch';

@@ -18,7 +18,7 @@
 - 动态注册 / 移除 LLM 模型
 - 访问 Backend、LLM Router、Storage 等所有内部对象
 - monkey-patch 任意内部方法（patchMethod / patchPrototype）
-- 注册自定义 slash 命令（所有平台通用）
+- 平台创建后回调（onPlatformsReady）——可 patchMethod 修改任意平台行为
 - 向 Web 平台注册自定义 HTTP 路由
 - 插件间通信（共享事件总线 + 插件管理器引用）
 - 通过 Backend EventEmitter 发射和监听自定义事件
@@ -32,7 +32,6 @@ src/plugins/
 ├── manager.ts              PluginManager（发现、加载、激活、停用）
 ├── patch.ts                通用 monkey-patch 工具（patchMethod / patchPrototype）
 ├── event-bus.ts            插件间共享事件总线
-├── command-registry.ts     自定义 slash 命令注册表
 ├── prebootstrap-context.ts PreBootstrap 阶段上下文
 └── index.ts                统一导出
 ```
@@ -187,8 +186,8 @@ interface PluginContext {
   addSystemPromptPart(part: Part): void;
   removeSystemPromptPart(part: Part): void;
 
-  // 自定义命令
-  registerCommand(command: PluginCommand): void;
+  // 平台就绪回调
+  onPlatformsReady(callback: (platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>): void;
 
   // 延迟初始化
   onReady(callback: (api: IrisAPI) => void | Promise<void>): void;
@@ -458,7 +457,6 @@ interface IrisAPI {
   // --- 高级能力 ---
   pluginManager: PluginManager;       // 插件管理器（查询其他插件信息）
   eventBus: PluginEventBus;           // 插件间共享事件总线
-  commands: PluginCommandRegistry;    // 自定义命令注册表
   patchMethod: typeof patchMethod;    // 安全替换对象方法
   patchPrototype: typeof patchPrototype; // 安全替换类原型方法
   registerWebRoute?: (method, path, handler) => void; // 向 Web 平台注册路由
@@ -500,34 +498,53 @@ ctx.onReady((api) => {
 
 ---
 
-## 自定义命令
+## 平台修改：onPlatformsReady
 
-插件可以注册自定义 slash 命令。命令在所有平台通用。Console 平台在处理用户输入时会优先检查插件命令注册表。
+插件可通过 `onPlatformsReady` 回调在平台创建完成后获得平台实例引用，配合 `patchMethod` 修改任意平台的行为。
+
+每个平台的指令体系不同（Telegram 用 commandRouter，QQ/企微用 if/else 链），插件可按需针对具体平台做定制：
 
 ```typescript
-ctx.registerCommand({
-  name: '/stats',
-  description: '查看会话统计信息',
-  handler: async (args, context) => {
-    const history = await api.storage.getHistory(context.sessionId);
-    return `当前会话共 ${history.length} 条消息`;
-  },
+ctx.onPlatformsReady((platforms, api) => {
+  // 为 Telegram 平台添加自定义指令
+  const tg = platforms.get('telegram');
+  if (tg) {
+    api.patchMethod(tg, 'handleCommand', async (original, text, cs) => {
+      if (text.startsWith('/stats')) {
+        // 使用 Telegram 特有的回复方式
+        return true;
+      }
+      return original(text, cs);
+    });
+  }
+
+  // 为 QQ 平台添加自定义指令（参数签名不同）
+  const qq = platforms.get('qq');
+  if (qq) {
+    api.patchMethod(qq, 'handleCommand', async (original, text, ck, target) => {
+      if (text.trim() === '/stats') {
+        return true;
+      }
+      return original(text, ck, target);
+    });
+  }
 });
 ```
 
-命令注册后，用户在任何平台输入 `/stats` 即可触发。handler 返回的字符串会显示给用户。
+也可以通过 monkey-patch `backend.chat` 实现跨平台的命令拦截（所有未识别的 / 命令最终都会到达 `backend.chat`）：
 
 ```typescript
-interface PluginCommand {
-  name: string;         // 命令名（含 / 前缀）
-  description: string;  // 帮助文本
-  handler: (args: string, context: CommandContext) => Promise<string | undefined> | string | undefined;
-}
-
-interface CommandContext {
-  sessionId: string;    // 当前会话 ID
-  platform: string;     // 平台类型（'console' / 'web' / 'telegram' 等）
-}
+ctx.onReady((api) => {
+  api.patchMethod(api.backend, 'chat', async (original, sessionId, text, images, docs) => {
+    if (text.trim() === '/stats') {
+      const history = await api.storage.getHistory(sessionId);
+      api.backend.emit('response', sessionId, `当前会话共 ${history.length} 条消息`);
+      api.backend.emit('done', sessionId, 0);
+      return;
+    }
+    return original(sessionId, text, images, docs);
+  });
+});
 ```
 
 ---
@@ -692,14 +709,17 @@ bootstrap()
   ├─→ 注入钩子 + LLM/Tool 拦截器
   │
   ├─→ [PluginManager.notifyReady()]   ← 插件 onReady 回调
-  │     └─→ callback(IrisAPI)         ← 完整 API 包含 patchMethod / eventBus / commands
+  │     └─→ callback(IrisAPI)         ← 完整 API 包含 patchMethod / eventBus
   │
   ▼
   返回 BootstrapResult
       │
       ├─→ 创建平台
       │     ├─→ WebPlatform → 绑定 registerWebRoute 到 IrisAPI
-      │     └─→ ConsolePlatform → 注入 commandRegistry
+      │     └─→ ...
+      │
+      ├─→ [PluginManager.notifyPlatformsReady()]  ← 插件 onPlatformsReady 回调
+      │     └─→ callback(platformMap, IrisAPI)     ← 可 patchMethod 修改任意平台
       │
       ▼
     平台启动
@@ -711,10 +731,10 @@ bootstrap()
 
 | 维度 | MCP | 插件系统 |
 |------|-----|---------|
-| 扩展范围 | 仅工具 | 工具 + 模式 + 钩子 + 内部 API + 方法替换 + 命令 + 路由 |
+| 扩展范围 | 仅工具 | 工具 + 模式 + 钩子 + 内部 API + 方法替换 + 平台修改 + 路由 |
 | 运行方式 | 子进程 / 远程 | 同进程 |
 | 协议 | MCP 标准协议 | Iris 内部接口 |
-| 权限 | 仅工具调用 | 完整访问所有内部对象，可替换任意方法，可注册命令和路由 |
+| 权限 | 仅工具调用 | 完整访问所有内部对象，可替换任意方法，可修改平台行为和注册路由 |
 
 两者共存。只加工具用 MCP 就够了。要修改消息流程、拦截工具、操作提示词、监听事件、替换内部行为，用插件。
 
@@ -759,13 +779,18 @@ const plugin: IrisPlugin = {
       text: '安全规则：禁止执行任何删除系统文件的命令。',
     });
 
-    // 4. 注册自定义命令
-    ctx.registerCommand({
-      name: '/audit',
-      description: '查看安全审计日志',
-      handler: (args) => {
-        return '最近 10 条审计日志：\n...';
-      },
+    // 4. 平台就绪后添加自定义指令
+    ctx.onPlatformsReady((platforms, api) => {
+      const tg = platforms.get('telegram');
+      if (tg) {
+        api.patchMethod(tg, 'handleCommand', async (original, text, cs) => {
+          if (text.startsWith('/audit')) {
+            // 返回审计日志（使用 Telegram 平台特有的回复方式）
+            return true;
+          }
+          return original(text, cs);
+        });
+      }
     });
 
     // 5. onReady：高级功能
@@ -809,7 +834,7 @@ export default plugin;
 1. 在 `~/.iris/plugins/` 下创建插件目录
 2. 创建 `index.ts`，导出一个 `IrisPlugin` 对象
 3. 在 `activate()` 中使用 `ctx` 注册功能
-4. 可选：通过 `ctx.registerCommand()` 注册自定义命令
+4. 可选：通过 `ctx.onPlatformsReady()` 修改平台行为
 5. 可选：通过 `ctx.onReady()` 获取 Backend 等内部对象
 6. 可选：通过 `api.patchMethod()` 替换内部方法
 7. 在 `~/.iris/configs/plugins.yaml` 中添加插件条目
