@@ -462,7 +462,11 @@ function scheduleAutoSave() {
 
 watch(() => JSON.stringify(platformConfig), scheduleAutoSave)
 
-onMounted(async () => {
+async function loadData() {
+  configLoaded = false
+  loading.value = true
+  statusText.value = ''
+  statusError.value = false
   try {
     const data = await getConfig()
     loadPlatformFromData(data)
@@ -473,7 +477,9 @@ onMounted(async () => {
     loading.value = false
     configLoaded = true
   }
-})
+}
+
+onMounted(() => { loadData() })
 
 onBeforeUnmount(() => {
   if (autoSaveTimer) clearTimeout(autoSaveTimer)

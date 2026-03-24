@@ -322,7 +322,8 @@ export function useDeployView() {
 
     await Promise.all([loadDetect(), loadDeployState({ overwriteForm: true }), loadAccessRequirements()])
     formReady.value = true
-    await refreshPreview()
+    // 预览不阻塞首屏，后台加载
+    refreshPreview()
   })
 
   async function loadDetect() {

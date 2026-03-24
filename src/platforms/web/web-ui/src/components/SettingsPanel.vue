@@ -303,6 +303,7 @@
           </div>
         </section>
 
+        <template v-if="deferredReady">
         <section id="settings-section-mcp" class="settings-section">
           <div class="settings-section-head">
             <div>
@@ -764,7 +765,7 @@
             </div>
           </template>
         </section>
-
+        </template>
 
 
         <div class="form-actions">
@@ -779,7 +780,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, Transition } from 'vue'
+import { ref, reactive, onMounted, Transition } from 'vue'
 import AppIcon from './AppIcon.vue'
 import AppSelect from './AppSelect.vue'
 import { ICONS } from '../constants/icons'
@@ -855,6 +856,12 @@ function buildZoneSelectOptions(zones: Array<{ id: string; name: string; status:
 }
 
 const emit = defineEmits<{ close: [] }>()
+
+// 延迟渲染下方 section，优先渲染用户首先看到的顶部内容
+const deferredReady = ref(false)
+onMounted(() => {
+  requestAnimationFrame(() => { deferredReady.value = true })
+})
 
 const {
   currentTheme,

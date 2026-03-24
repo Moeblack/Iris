@@ -1100,11 +1100,15 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     options.onClose()
   }
 
-  onMounted(() => {
+  onMounted(async () => {
     window.addEventListener('keydown', onKeydown)
     refreshAccessState()
     unsubscribeManagementToken = subscribeManagementTokenChange(refreshAccessState)
     unsubscribeAuthToken = subscribeAuthTokenChange(refreshAccessState)
+    await loadConfigData()
+    // 主配置加载完成后再加载非关键数据，不阻塞首屏
+    loadCfStatus()
+    loadAgentStatus()
   })
   onUnmounted(() => {
     window.removeEventListener('keydown', onKeydown)
@@ -1233,184 +1237,201 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
   }
 
   async function loadConfigData() {
-    try {
-      refreshAccessState()
-      const data = await getConfig()
-      loadModelEntriesFromConfig(data.llm || {})
+    refreshAccessState()
 
-      config.systemPrompt = data.system?.systemPrompt || ''
-      config.maxToolRounds = data.system?.maxToolRounds ?? 10
-      syncMaxToolRoundsInput()
-      config.stream = data.system?.stream ?? true
+    // 并行发起 getConfig 和 getStatus，避免串行等待
+    const [configResult, statusResult] = await Promise.allSettled([
+      getConfig(),
+      getStatus(),
+    ])
 
-      // MCP
-      if (data.mcp?.servers && typeof data.mcp.servers === 'object') {
-        mcpOriginalNames.value = Object.keys(data.mcp.servers)
-        for (const [name, cfg] of Object.entries(data.mcp.servers) as [string, any][]) {
-          mcpServers.push({
-            name,
-            transport: normalizeMcpTransport(cfg.transport),
-            command: cfg.command || '',
-            args: Array.isArray(cfg.args) ? cfg.args.join('\n') : '',
-            cwd: cfg.cwd || '',
-            url: cfg.url || '',
-            authHeader: cfg.headers?.Authorization || '',
-            timeout: cfg.timeout ?? 30000,
-            timeoutInput: String(cfg.timeout ?? 30000),
-            enabled: cfg.enabled !== false,
-            open: false,
-          })
-        }
-      }
+    // 处理 config
+    if (configResult.status === 'fulfilled') {
+      try {
+        const data = configResult.value
+        loadModelEntriesFromConfig(data.llm || {})
 
-      // Sub-Agents
-      if (data.sub_agents?.types && typeof data.sub_agents.types === 'object') {
-        for (const [name, cfg] of Object.entries(data.sub_agents.types) as [string, any][]) {
-          if (!cfg || typeof cfg !== 'object') continue
-          let toolMode: SubAgentToolMode = 'all'
-          let toolList = ''
-          if (Array.isArray(cfg.allowedTools) && cfg.allowedTools.length > 0) {
-            toolMode = 'allowed'
-            toolList = cfg.allowedTools.join('\n')
-          } else if (Array.isArray(cfg.excludedTools) && cfg.excludedTools.length > 0) {
-            toolMode = 'excluded'
-            toolList = cfg.excludedTools.join('\n')
+        config.systemPrompt = data.system?.systemPrompt || ''
+        config.maxToolRounds = data.system?.maxToolRounds ?? 10
+        syncMaxToolRoundsInput()
+        config.stream = data.system?.stream ?? true
+
+        // MCP
+        if (data.mcp?.servers && typeof data.mcp.servers === 'object') {
+          mcpOriginalNames.value = Object.keys(data.mcp.servers)
+          for (const [name, cfg] of Object.entries(data.mcp.servers) as [string, any][]) {
+            mcpServers.push({
+              name,
+              transport: normalizeMcpTransport(cfg.transport),
+              command: cfg.command || '',
+              args: Array.isArray(cfg.args) ? cfg.args.join('\n') : '',
+              cwd: cfg.cwd || '',
+              url: cfg.url || '',
+              authHeader: cfg.headers?.Authorization || '',
+              timeout: cfg.timeout ?? 30000,
+              timeoutInput: String(cfg.timeout ?? 30000),
+              enabled: cfg.enabled !== false,
+              open: false,
+            })
           }
-          subAgentEntries.push(createSubAgentEntry({
-            name,
-            description: cfg.description || '',
-            systemPrompt: cfg.systemPrompt || '',
-            toolMode,
-            toolList,
-            modelName: cfg.modelName || '',
-            maxToolRounds: cfg.maxToolRounds ?? 200,
-            parallel: cfg.parallel ?? false,
-            open: false,
-          }))
         }
-        subAgentOriginalNames.value = subAgentEntries.map(e => e.name)
-      }
 
-      // Modes
-      if (data.modes && typeof data.modes === 'object' && !Array.isArray(data.modes)) {
-        for (const [name, cfg] of Object.entries(data.modes) as [string, any][]) {
-          if (name === 'normal') continue
-          if (!cfg || typeof cfg !== 'object') continue
-          let toolMode: ModeToolMode = 'all'
-          let toolList = ''
-          if (Array.isArray(cfg.tools?.include) && cfg.tools.include.length > 0) {
-            toolMode = 'include'
-            toolList = cfg.tools.include.join('\n')
-          } else if (Array.isArray(cfg.tools?.exclude) && cfg.tools.exclude.length > 0) {
-            toolMode = 'exclude'
-            toolList = cfg.tools.exclude.join('\n')
+        // Sub-Agents
+        if (data.sub_agents?.types && typeof data.sub_agents.types === 'object') {
+          for (const [name, cfg] of Object.entries(data.sub_agents.types) as [string, any][]) {
+            if (!cfg || typeof cfg !== 'object') continue
+            let toolMode: SubAgentToolMode = 'all'
+            let toolList = ''
+            if (Array.isArray(cfg.allowedTools) && cfg.allowedTools.length > 0) {
+              toolMode = 'allowed'
+              toolList = cfg.allowedTools.join('\n')
+            } else if (Array.isArray(cfg.excludedTools) && cfg.excludedTools.length > 0) {
+              toolMode = 'excluded'
+              toolList = cfg.excludedTools.join('\n')
+            }
+            subAgentEntries.push(createSubAgentEntry({
+              name,
+              description: cfg.description || '',
+              systemPrompt: cfg.systemPrompt || '',
+              toolMode,
+              toolList,
+              modelName: cfg.modelName || '',
+              maxToolRounds: cfg.maxToolRounds ?? 200,
+              parallel: cfg.parallel ?? false,
+              open: false,
+            }))
           }
-          modeEntries.push(createModeEntry({
-            name,
-            description: cfg.description || '',
-            systemPrompt: cfg.systemPrompt || '',
-            toolMode,
-            toolList,
-            open: false,
-          }))
+          subAgentOriginalNames.value = subAgentEntries.map(e => e.name)
         }
-        modeOriginalNames.value = modeEntries.map(e => e.name)
-      }
 
-      // Plugins
-      if (Array.isArray(data.plugins)) {
-        for (const p of data.plugins) {
-          if (!p || typeof p !== 'object') continue
-          pluginEntries.push(createPluginEntry({
-            name: p.name || '',
-            type: p.type === 'npm' ? 'npm' : 'local',
-            enabled: p.enabled !== false,
-            config: p.config ? JSON.stringify(p.config, null, 2) : '',
-            open: false,
-          }))
-        }
-      }
-
-      // Computer Use
-      if (data.computer_use && typeof data.computer_use === 'object') {
-        const cu = data.computer_use
-        computerUse.enabled = !!cu.enabled
-        computerUse.environment = cu.environment === 'screen' ? 'screen' : 'browser'
-        computerUse.screenWidth = cu.screenWidth != null ? String(cu.screenWidth) : ''
-        computerUse.screenHeight = cu.screenHeight != null ? String(cu.screenHeight) : ''
-        computerUse.postActionDelay = cu.postActionDelay != null ? String(cu.postActionDelay) : ''
-        computerUse.screenshotFormat = cu.screenshotFormat === 'jpeg' ? 'jpeg' : 'png'
-        computerUse.screenshotQuality = cu.screenshotQuality != null ? String(cu.screenshotQuality) : ''
-        computerUse.headless = !!cu.headless
-        computerUse.initialUrl = cu.initialUrl || ''
-        computerUse.searchEngineUrl = cu.searchEngineUrl || ''
-        computerUse.highlightMouse = !!cu.highlightMouse
-        computerUse.targetWindow = cu.targetWindow || ''
-        computerUse.backgroundMode = !!cu.backgroundMode
-        computerUse.maxRecentScreenshots = cu.maxRecentScreenshots != null ? String(cu.maxRecentScreenshots) : ''
-        if (cu.environmentTools && typeof cu.environmentTools === 'object') {
-          const loadPolicy = (policy: any): { mode: string; list: string } => {
-            if (!policy || typeof policy !== 'object') return { mode: 'all', list: '' }
-            if (Array.isArray(policy.include) && policy.include.length > 0) return { mode: 'include', list: policy.include.join('\n') }
-            if (Array.isArray(policy.exclude) && policy.exclude.length > 0) return { mode: 'exclude', list: policy.exclude.join('\n') }
-            return { mode: 'all', list: '' }
+        // Modes
+        if (data.modes && typeof data.modes === 'object' && !Array.isArray(data.modes)) {
+          for (const [name, cfg] of Object.entries(data.modes) as [string, any][]) {
+            if (name === 'normal') continue
+            if (!cfg || typeof cfg !== 'object') continue
+            let toolMode: ModeToolMode = 'all'
+            let toolList = ''
+            if (Array.isArray(cfg.tools?.include) && cfg.tools.include.length > 0) {
+              toolMode = 'include'
+              toolList = cfg.tools.include.join('\n')
+            } else if (Array.isArray(cfg.tools?.exclude) && cfg.tools.exclude.length > 0) {
+              toolMode = 'exclude'
+              toolList = cfg.tools.exclude.join('\n')
+            }
+            modeEntries.push(createModeEntry({
+              name,
+              description: cfg.description || '',
+              systemPrompt: cfg.systemPrompt || '',
+              toolMode,
+              toolList,
+              open: false,
+            }))
           }
-          const bp = loadPolicy(cu.environmentTools.browser)
-          computerUse.envToolBrowserMode = bp.mode
-          computerUse.envToolBrowserList = bp.list
-          const sp = loadPolicy(cu.environmentTools.screen)
-          computerUse.envToolScreenMode = sp.mode
-          computerUse.envToolScreenList = sp.list
-          const bgp = loadPolicy(cu.environmentTools.background)
-          computerUse.envToolBackgroundMode = bgp.mode
-          computerUse.envToolBackgroundList = bgp.list
+          modeOriginalNames.value = modeEntries.map(e => e.name)
         }
-      }
 
-      // Platform
-      if (data.platform && typeof data.platform === 'object') {
-        const pl = data.platform
-        if (Array.isArray(pl.types)) platformConfig.types = [...pl.types]
-        if (pl.web) {
-          platformConfig.web.port = pl.web.port != null ? String(pl.web.port) : ''
-          platformConfig.web.host = pl.web.host || ''
-          platformConfig.web.authToken = pl.web.authToken || ''
-          platformConfig.web.managementToken = pl.web.managementToken || ''
+        // Plugins
+        if (Array.isArray(data.plugins)) {
+          for (const p of data.plugins) {
+            if (!p || typeof p !== 'object') continue
+            pluginEntries.push(createPluginEntry({
+              name: p.name || '',
+              type: p.type === 'npm' ? 'npm' : 'local',
+              enabled: p.enabled !== false,
+              config: p.config ? JSON.stringify(p.config, null, 2) : '',
+              open: false,
+            }))
+          }
         }
-        if (pl.discord) platformConfig.discord.token = pl.discord.token || ''
-        if (pl.telegram) {
-          platformConfig.telegram.token = pl.telegram.token || ''
-          platformConfig.telegram.showToolStatus = !!pl.telegram.showToolStatus
-          platformConfig.telegram.groupMentionRequired = !!pl.telegram.groupMentionRequired
-        }
-        if (pl.wxwork) {
-          platformConfig.wxwork.botId = pl.wxwork.botId || ''
-          platformConfig.wxwork.secret = pl.wxwork.secret || ''
-          platformConfig.wxwork.showToolStatus = !!pl.wxwork.showToolStatus
-        }
-        if (pl.lark) {
-          platformConfig.lark.appId = pl.lark.appId || ''
-          platformConfig.lark.appSecret = pl.lark.appSecret || ''
-          platformConfig.lark.verificationToken = pl.lark.verificationToken || ''
-          platformConfig.lark.encryptKey = pl.lark.encryptKey || ''
-          platformConfig.lark.showToolStatus = !!pl.lark.showToolStatus
-        }
-        if (pl.qq) {
-          platformConfig.qq.wsUrl = pl.qq.wsUrl || ''
-          platformConfig.qq.accessToken = pl.qq.accessToken || ''
-          platformConfig.qq.selfId = pl.qq.selfId || ''
-          platformConfig.qq.groupMode = pl.qq.groupMode || 'at'
-          platformConfig.qq.showToolStatus = !!pl.qq.showToolStatus
-        }
-      }
 
-      // 等待 provider watcher 的异步回调执行完毕后再启用副作用
-      await nextTick()
-      configLoaded = true
-      dirty.value = false
-      syncMaxToolRoundsInput()
-    } catch (err: any) {
-      const detail = rememberAccessRequirementsFromError(err)
+        // Computer Use
+        if (data.computer_use && typeof data.computer_use === 'object') {
+          const cu = data.computer_use
+          computerUse.enabled = !!cu.enabled
+          computerUse.environment = cu.environment === 'screen' ? 'screen' : 'browser'
+          computerUse.screenWidth = cu.screenWidth != null ? String(cu.screenWidth) : ''
+          computerUse.screenHeight = cu.screenHeight != null ? String(cu.screenHeight) : ''
+          computerUse.postActionDelay = cu.postActionDelay != null ? String(cu.postActionDelay) : ''
+          computerUse.screenshotFormat = cu.screenshotFormat === 'jpeg' ? 'jpeg' : 'png'
+          computerUse.screenshotQuality = cu.screenshotQuality != null ? String(cu.screenshotQuality) : ''
+          computerUse.headless = !!cu.headless
+          computerUse.initialUrl = cu.initialUrl || ''
+          computerUse.searchEngineUrl = cu.searchEngineUrl || ''
+          computerUse.highlightMouse = !!cu.highlightMouse
+          computerUse.targetWindow = cu.targetWindow || ''
+          computerUse.backgroundMode = !!cu.backgroundMode
+          computerUse.maxRecentScreenshots = cu.maxRecentScreenshots != null ? String(cu.maxRecentScreenshots) : ''
+          if (cu.environmentTools && typeof cu.environmentTools === 'object') {
+            const loadPolicy = (policy: any): { mode: string; list: string } => {
+              if (!policy || typeof policy !== 'object') return { mode: 'all', list: '' }
+              if (Array.isArray(policy.include) && policy.include.length > 0) return { mode: 'include', list: policy.include.join('\n') }
+              if (Array.isArray(policy.exclude) && policy.exclude.length > 0) return { mode: 'exclude', list: policy.exclude.join('\n') }
+              return { mode: 'all', list: '' }
+            }
+            const bp = loadPolicy(cu.environmentTools.browser)
+            computerUse.envToolBrowserMode = bp.mode
+            computerUse.envToolBrowserList = bp.list
+            const sp = loadPolicy(cu.environmentTools.screen)
+            computerUse.envToolScreenMode = sp.mode
+            computerUse.envToolScreenList = sp.list
+            const bgp = loadPolicy(cu.environmentTools.background)
+            computerUse.envToolBackgroundMode = bgp.mode
+            computerUse.envToolBackgroundList = bgp.list
+          }
+        }
+
+        // Platform
+        if (data.platform && typeof data.platform === 'object') {
+          const pl = data.platform
+          if (Array.isArray(pl.types)) platformConfig.types = [...pl.types]
+          if (pl.web) {
+            platformConfig.web.port = pl.web.port != null ? String(pl.web.port) : ''
+            platformConfig.web.host = pl.web.host || ''
+            platformConfig.web.authToken = pl.web.authToken || ''
+            platformConfig.web.managementToken = pl.web.managementToken || ''
+          }
+          if (pl.discord) platformConfig.discord.token = pl.discord.token || ''
+          if (pl.telegram) {
+            platformConfig.telegram.token = pl.telegram.token || ''
+            platformConfig.telegram.showToolStatus = !!pl.telegram.showToolStatus
+            platformConfig.telegram.groupMentionRequired = !!pl.telegram.groupMentionRequired
+          }
+          if (pl.wxwork) {
+            platformConfig.wxwork.botId = pl.wxwork.botId || ''
+            platformConfig.wxwork.secret = pl.wxwork.secret || ''
+            platformConfig.wxwork.showToolStatus = !!pl.wxwork.showToolStatus
+          }
+          if (pl.lark) {
+            platformConfig.lark.appId = pl.lark.appId || ''
+            platformConfig.lark.appSecret = pl.lark.appSecret || ''
+            platformConfig.lark.verificationToken = pl.lark.verificationToken || ''
+            platformConfig.lark.encryptKey = pl.lark.encryptKey || ''
+            platformConfig.lark.showToolStatus = !!pl.lark.showToolStatus
+          }
+          if (pl.qq) {
+            platformConfig.qq.wsUrl = pl.qq.wsUrl || ''
+            platformConfig.qq.accessToken = pl.qq.accessToken || ''
+            platformConfig.qq.selfId = pl.qq.selfId || ''
+            platformConfig.qq.groupMode = pl.qq.groupMode || 'at'
+            platformConfig.qq.showToolStatus = !!pl.qq.showToolStatus
+          }
+        }
+
+        // 等待 provider watcher 的异步回调执行完毕后再启用副作用
+        await nextTick()
+        configLoaded = true
+        dirty.value = false
+        syncMaxToolRoundsInput()
+      } catch (err: any) {
+        const detail = rememberAccessRequirementsFromError(err)
+        statusText.value = accessLocked.value
+          ? formatAccessLockedMessage('加载配置失败')
+          : '加载配置失败: ' + (detail || '未知错误')
+        statusError.value = true
+        dirty.value = false
+      }
+    } else {
+      const detail = rememberAccessRequirementsFromError(configResult.reason)
       statusText.value = accessLocked.value
         ? formatAccessLockedMessage('加载配置失败')
         : '加载配置失败: ' + (detail || '未知错误')
@@ -1419,15 +1440,16 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     }
     syncMaxToolRoundsInput()
 
-    try {
-      const status = await getStatus()
+    // 处理 status
+    if (statusResult.status === 'fulfilled') {
+      const status = statusResult.value
       tools.value = status.tools || []
       disabledTools.value = new Set(status.disabledTools || [])
       mcpStatus.value = status.mcpStatus ?? []
       runtimeInfo.value = status.runtime ?? null
       applyAccessRequirements(status)
-    } catch (err: any) {
-      rememberAccessRequirementsFromError(err)
+    } else {
+      rememberAccessRequirementsFromError(statusResult.reason)
       tools.value = []
     }
   }
@@ -1449,7 +1471,6 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     }
   }
 
-  onMounted(() => loadConfigData())
 
   function buildModelEntryPayload(entry: ModelEntry): Record<string, unknown> {
     const payload: Record<string, unknown> = {
@@ -1972,8 +1993,7 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     await Promise.all([loadCfDns(), loadCfSsl()])
   }
 
-  // 初始化加载 CF 状态
-  onMounted(() => loadCfStatus())
+  // CF 状态由主 onMounted 在 loadConfigData 完成后加载
 
   // ---- 多 Agent 管理 ----
 
@@ -2016,7 +2036,7 @@ export function useSettingsPanel(options: UseSettingsPanelOptions) {
     }
   }
 
-  onMounted(() => loadAgentStatus())
+  // Agent 状态由主 onMounted 在 loadConfigData 完成后加载
 
   async function handleInitAgentManifest() {
     try {

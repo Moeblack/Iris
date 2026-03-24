@@ -67,9 +67,9 @@
         <template v-if="item.kind === 'message'">
           <template v-for="(part, j) in item.message.parts" :key="`${item.key}-${j}`">
             <MessageBubble
-              v-if="part.type === 'text' && part.text?.trim() && !isInternalMarker(part.text!)"
+              v-if="part.type === 'text' && part.text?.trim() && !isInternalMarker(part.text ?? '')"
               :role="item.message.role"
-              :text="part.text!"
+              :text="part.text ?? ''"
               :meta="item.message.role === 'model' && isLastVisibleTextPart(item.message, j) ? item.message.meta : undefined"
               :timestamp="item.message.timestamp"
               :message-index="item.messageIndex"
@@ -190,14 +190,14 @@
                     <ToolBlock
                       v-if="part.type === 'function_call'"
                       type="call"
-                      :name="part.name!"
+                      :name="part.name ?? ''"
                       :data="part.args"
                       :collapsed="false"
                     />
                     <ToolBlock
                       v-else-if="part.type === 'function_response'"
                       type="response"
-                      :name="part.name!"
+                      :name="part.name ?? ''"
                       :data="part.response"
                       :call-args="findCallArgsInEntries(item.entries, part)"
                       :collapsed="false"

@@ -108,6 +108,7 @@ export function useTerminal() {
   let container: HTMLElement | null = null
   let resizeObserver: ResizeObserver | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let wheelHandler: ((e: WheelEvent) => void) | null = null
   /** 进程异常退出时禁止自动重连，避免死循环 */
   let suppressReconnect = false
 
@@ -277,7 +278,7 @@ export function useTerminal() {
     })
 
     // 鼠标滚轮：当 TUI 应用使用交替屏幕缓冲区时，将滚轮转为上/下箭头键序列
-    el.addEventListener('wheel', (e: WheelEvent) => {
+    wheelHandler = (e: WheelEvent) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return
       // 检查 xterm 是否在交替屏幕缓冲区（scrollback 不可用时即是交替屏幕）
       const buffer = terminal!.buffer
@@ -288,7 +289,8 @@ export function useTerminal() {
         ws.send(seq.repeat(lines))
       }
       // 普通缓冲区：让 xterm 自身处理滚动（scrollback）
-    }, { passive: false })
+    }
+    el.addEventListener('wheel', wheelHandler, { passive: false })
 
     // 终端输入 → WebSocket
     terminal.onData((data) => {
@@ -317,6 +319,10 @@ export function useTerminal() {
   }
 
   function detach() {
+    if (wheelHandler && container) {
+      container.removeEventListener('wheel', wheelHandler)
+    }
+    wheelHandler = null
     container = null
 
     if (reconnectTimer) {

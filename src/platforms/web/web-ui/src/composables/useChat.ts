@@ -115,8 +115,16 @@ function resetStreamingState() {
   isStreaming.value = false
 }
 
-/** 当前请求的 AbortController，预留给后续显式取消能力 */
+/** 当前请求的 AbortController */
 let _currentController: AbortController | null = null
+
+/** 取消当前进行中的 SSE 请求，释放网络资源 */
+function abortCurrentRequest() {
+  if (_currentController) {
+    _currentController.abort()
+    _currentController = null
+  }
+}
 
 /** 历史加载请求版本号，用于丢弃过期响应 */
 let loadVersion = 0
@@ -569,7 +577,7 @@ export function useChat() {
         }
 
         sending.value = false
-        _currentController = null
+        abortCurrentRequest()
         activeRequestToken = null
         activeRequestSessionId = null
         if (finishedSessionId && currentSessionId.value === finishedSessionId && requestNeedsHistoryRefresh) {
@@ -599,7 +607,7 @@ export function useChat() {
         }
 
         sending.value = false
-        _currentController = null
+        abortCurrentRequest()
         activeRequestToken = null
         activeRequestSessionId = null
         void loadSessions()

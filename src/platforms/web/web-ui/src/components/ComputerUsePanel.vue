@@ -340,11 +340,14 @@ function scheduleAutoSave() {
 
 watch(() => JSON.stringify(computerUse), scheduleAutoSave)
 
-onMounted(async () => {
+async function loadData() {
+  configLoaded = false
+  loading.value = true
+  statusText.value = ''
+  statusError.value = false
   try {
     const data = await getConfig()
     loadComputerUseFromData(data)
-    // 记录初始快照，防止 watcher 触发后将未变化的配置当作"更改"保存
     lastSavedSnapshot = JSON.stringify(buildPayload())
   } catch (err: any) {
     statusText.value = '加载失败: ' + (err instanceof Error ? err.message : '未知错误')
@@ -353,7 +356,9 @@ onMounted(async () => {
     loading.value = false
     configLoaded = true
   }
-})
+}
+
+onMounted(() => { loadData() })
 
 onBeforeUnmount(() => {
   if (autoSaveTimer) clearTimeout(autoSaveTimer)

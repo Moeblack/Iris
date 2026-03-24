@@ -68,6 +68,7 @@ const roleLabel = computed(() => getRoleLabel(props.role))
 const previewOpen = ref(false)
 const renderedHtml = ref('')
 const contentEl = ref<HTMLElement | null>(null)
+let codeCopyResetTimer: ReturnType<typeof setTimeout> | null = null
 
 const MIME_LABELS: Record<string, string> = {
   'application/pdf': 'PDF 文档',
@@ -212,11 +213,16 @@ async function handleCodeCopyClick(event: MouseEvent) {
     button.classList.add('error')
   }
 
-  setTimeout(() => {
+  if (codeCopyResetTimer) clearTimeout(codeCopyResetTimer)
+  codeCopyResetTimer = setTimeout(() => {
+    codeCopyResetTimer = null
     button.textContent = '复制代码'
     button.classList.remove('copied', 'error')
   }, 1800)
 }
 
-onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleKeydown)
+  if (codeCopyResetTimer) { clearTimeout(codeCopyResetTimer); codeCopyResetTimer = null }
+})
 </script>

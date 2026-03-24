@@ -242,20 +242,27 @@ const splitPairs = computed<SplitPair[]>(() => {
 
 // ---- 加载预览 ----
 
+let previewRequestVersion = 0
+
 watch(currentTool, async (tool) => {
   if (!tool) return
   currentItemIndex.value = 0
   if (previewCache.value.has(tool.id)) return
 
+  const version = ++previewRequestVersion
   previewLoading.value = true
   previewError.value = ''
   try {
     const preview = await api.getToolDiffPreview(tool.id)
+    if (version !== previewRequestVersion) return
     previewCache.value.set(tool.id, preview)
   } catch (err) {
+    if (version !== previewRequestVersion) return
     previewError.value = err instanceof Error ? err.message : '加载预览失败'
   } finally {
-    previewLoading.value = false
+    if (version === previewRequestVersion) {
+      previewLoading.value = false
+    }
   }
 }, { immediate: true })
 
