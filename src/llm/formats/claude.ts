@@ -196,11 +196,19 @@ export class ClaudeFormat implements FormatAdapter {
       content: { role: 'model', parts },
       finishReason,
       usageMetadata: data.usage
-        ? {
-            promptTokenCount: data.usage.input_tokens,
-            candidatesTokenCount: data.usage.output_tokens,
-            totalTokenCount: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
-          }
+        ? (() => {
+            const inputBase = data.usage.input_tokens ?? 0;
+            const cacheCreation = data.usage.cache_creation_input_tokens ?? 0;
+            const cacheRead = data.usage.cache_read_input_tokens ?? 0;
+            const promptTotal = inputBase + cacheCreation + cacheRead;
+            const cachedTotal = cacheCreation + cacheRead;
+            return {
+              promptTokenCount: promptTotal,
+              ...(cachedTotal > 0 ? { cachedContentTokenCount: cachedTotal } : {}),
+              candidatesTokenCount: data.usage.output_tokens,
+              totalTokenCount: promptTotal + (data.usage.output_tokens ?? 0),
+            };
+          })()
         : undefined,
     };
   }
@@ -216,10 +224,12 @@ export class ClaudeFormat implements FormatAdapter {
       case 'message_start':
         // message_start 事件中包含 input_tokens
         if (data.message?.usage) {
-          st.inputTokens = data.message.usage.input_tokens ?? 0;
-          if (data.message.usage.cache_read_input_tokens) {
-            st.cacheReadInputTokens = data.message.usage.cache_read_input_tokens;
-          }
+          const u = data.message.usage;
+          st.inputTokens = (u.input_tokens ?? 0)
+            + (u.cache_creation_input_tokens ?? 0)
+            + (u.cache_read_input_tokens ?? 0);
+          st.cachedContentTokens = (u.cache_creation_input_tokens ?? 0)
+            + (u.cache_read_input_tokens ?? 0);
         }
         break;
 
@@ -291,6 +301,7 @@ export class ClaudeFormat implements FormatAdapter {
         if (data.usage) {
           chunk.usageMetadata = {
             promptTokenCount: st.inputTokens ?? 0,
+            ...(st.cachedContentTokens ? { cachedContentTokenCount: st.cachedContentTokens } : {}),
             candidatesTokenCount: data.usage.output_tokens,
             totalTokenCount: (st.inputTokens ?? 0) + (data.usage.output_tokens ?? 0),
           };
@@ -317,7 +328,7 @@ interface ClaudeStreamState extends StreamDecodeState {
   currentToolUse: { id: string; name: string; arguments: string } | null;
   pendingFunctionCalls: FunctionCallPart[];
   inputTokens: number;
-  cacheReadInputTokens?: number;
+  cachedContentTokens?: number;
   inThinkingBlock: boolean;
 }
 

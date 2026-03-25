@@ -68,6 +68,7 @@ export interface TokensDetail {
 /** API 调用的 Token 用量统计 */
 export interface UsageMetadata {
   promptTokenCount?: number;
+  cachedContentTokenCount?: number;
   candidatesTokenCount?: number;
   totalTokenCount?: number;
   promptTokensDetails?: TokensDetail[];

@@ -140,6 +140,7 @@ export interface ToolInvocation {
 /** 模型用量元数据 */
 export interface UsageMetadata {
   promptTokenCount?: number
+  cachedContentTokenCount?: number
   candidatesTokenCount?: number
   totalTokenCount?: number
 }
