@@ -1154,6 +1154,20 @@ describe('OpenAIResponsesFormat: encodeRequest', () => {
     expect(reasoning.encrypted_content).toBe('enc_abc_123');
   });
 
+  it('只有 encrypted_content 的 reasoning item 也会回传空 summary', () => {
+    const req = buildRequest([
+      userMsg('think'),
+      modelThoughtMsg('', { openai: 'enc_sig_only' }),
+      modelTextMsg('result'),
+    ], false);
+    const body = fmt.encodeRequest(req) as any;
+    const reasoning = body.input.find((i: any) => i.type === 'reasoning');
+
+    expect(reasoning).toBeDefined();
+    expect(reasoning.summary).toEqual([]);
+    expect(reasoning.encrypted_content).toBe('enc_sig_only');
+  });
+
   it('function_call arguments 是 JSON 字符串', () => {
     const req = buildRequest([
       userMsg('test'),
@@ -1169,6 +1183,123 @@ describe('OpenAIResponsesFormat: encodeRequest', () => {
     const req = buildRequest([userMsg('hi')], false);
     const body = fmt.encodeRequest(req) as any;
     expect(body.include).toContain('reasoning.encrypted_content');
+  });
+});
+
+describe('OpenAIResponsesFormat: stream decode', () => {
+  const fmt = new OpenAIResponsesFormat('o3');
+
+  it('只在 reasoning done 事件中回填 encrypted_content', () => {
+    const state = fmt.createStreamState();
+
+    const added = fmt.decodeStreamChunk({
+      event: 'response.output_item.added',
+      item: {
+        id: 'rs_stream_1',
+        type: 'reasoning',
+        summary: [{ type: 'summary_text', text: 'thinking...' }],
+        encrypted_content: 'enc_partial_should_not_emit',
+      },
+    }, state);
+
+    expect(added.partsDelta).toEqual([{ text: 'thinking...', thought: true }]);
+    expect(added.thoughtSignatures).toBeUndefined();
+
+    const done = fmt.decodeStreamChunk({
+      event: 'response.output_item.done',
+      item: {
+        id: 'rs_stream_1',
+        type: 'reasoning',
+        summary: [{ type: 'summary_text', text: 'thinking...' }],
+        encrypted_content: 'enc_final_sig',
+      },
+    }, state);
+
+    expect(done.partsDelta).toEqual([{ thought: true, thoughtSignatures: { openai: 'enc_final_sig' } }]);
+    expect(done.thoughtSignatures).toEqual({ openai: 'enc_final_sig' });
+  });
+
+  it('function_call 只在 output_item.done 时输出一次', () => {
+    const state = fmt.createStreamState();
+
+    const added = fmt.decodeStreamChunk({
+      event: 'response.output_item.added',
+      item: {
+        id: 'fc_stream_1',
+        type: 'function_call',
+        status: 'in_progress',
+        arguments: '',
+        call_id: 'call_stream_1',
+        name: 'list_files',
+      },
+    }, state);
+    expect(added.functionCalls).toBeUndefined();
+
+    fmt.decodeStreamChunk({
+      event: 'response.function_call_arguments.delta',
+      item_id: 'fc_stream_1',
+      delta: '{"paths":[".' ,
+    }, state);
+
+    const argsDone = fmt.decodeStreamChunk({
+      event: 'response.function_call_arguments.done',
+      item_id: 'fc_stream_1',
+      arguments: '{"paths":["."],"recursive":false}',
+    }, state);
+    expect(argsDone.functionCalls).toBeUndefined();
+
+    const itemDone = fmt.decodeStreamChunk({
+      event: 'response.output_item.done',
+      item: {
+        id: 'fc_stream_1',
+        type: 'function_call',
+        status: 'completed',
+        arguments: '{"paths":["."],"recursive":false}',
+        call_id: 'call_stream_1',
+        name: 'list_files',
+      },
+    }, state);
+
+    expect(itemDone.functionCalls).toHaveLength(1);
+    expect(itemDone.functionCalls![0].functionCall).toEqual({
+      name: 'list_files',
+      args: { paths: ['.'], recursive: false },
+      callId: 'call_stream_1',
+    });
+
+    const completed = fmt.decodeStreamChunk({ event: 'response.completed', response: {} }, state);
+    expect(completed.functionCalls).toBeUndefined();
+  });
+
+  it('response.completed 会读取 response.usage，并兜底输出未完成的 function_call', () => {
+    const state = fmt.createStreamState();
+
+    fmt.decodeStreamChunk({
+      event: 'response.output_item.added',
+      item: {
+        id: 'fc_stream_2',
+        type: 'function_call',
+        status: 'in_progress',
+        arguments: '',
+        call_id: 'call_stream_2',
+        name: 'read_file',
+      },
+    }, state);
+
+    fmt.decodeStreamChunk({
+      event: 'response.function_call_arguments.done',
+      item_id: 'fc_stream_2',
+      arguments: '{"files":[{"path":"README.md"}]}'
+    }, state);
+
+    const completed = fmt.decodeStreamChunk({
+      event: 'response.completed',
+      response: { usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 } },
+    }, state);
+
+    expect(completed.usageMetadata).toEqual({ promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 });
+    expect(completed.functionCalls?.[0].functionCall.callId).toBe('call_stream_2');
+    expect(completed.functionCalls?.[0].functionCall.name).toBe('read_file');
   });
 });
 

@@ -46,10 +46,10 @@ export class OpenAIResponsesFormat implements FormatAdapter {
 
         for (const part of content.parts) {
           if (isTextPart(part) && part.thought === true) {
-            const reasoningItem: any = { type: 'reasoning' };
-            if (part.text) {
-              reasoningItem.summary = [{ type: 'summary_text', text: part.text }];
-            }
+            const reasoningItem: any = {
+              type: 'reasoning',
+              summary: part.text ? [{ type: 'summary_text', text: part.text }] : [],
+            };
             if (part.thoughtSignatures?.openai) {
               reasoningItem.encrypted_content = part.thoughtSignatures.openai;
             }
@@ -199,7 +199,7 @@ export class OpenAIResponsesFormat implements FormatAdapter {
     } else if (event === 'response.output_item.added') {
       const item = data.item;
       if (item?.type === 'reasoning') {
-        const part = createReasoningPart(item, { includeText: true, includeSignature: true });
+        const part = createReasoningPart(item, { includeText: true, includeSignature: false });
         if (part) {
           chunk.partsDelta = [part];
           if ('thoughtSignatures' in part && part.thoughtSignatures) {
@@ -208,9 +208,6 @@ export class OpenAIResponsesFormat implements FormatAdapter {
         }
       } else if (item?.type === 'function_call') {
         rememberPendingFunctionCall(streamState, item);
-        if (item.status === 'completed') {
-          emitFunctionCallChunk(chunk, item, streamState);
-        }
       }
     } else if (event === 'response.function_call_arguments.delta') {
       appendPendingFunctionCallArguments(
@@ -219,13 +216,12 @@ export class OpenAIResponsesFormat implements FormatAdapter {
         data.delta,
       );
     } else if (event === 'response.function_call_arguments.done') {
-      const itemKey = rememberPendingFunctionCall(streamState, {
+      rememberPendingFunctionCall(streamState, {
         id: data.item_id ?? data.id,
         call_id: data.call_id,
         name: data.name,
         arguments: data.arguments,
       });
-      if (itemKey) emitFunctionCallChunk(chunk, itemKey, streamState);
     } else if (event === 'response.output_item.done') {
       const item = data.item;
       if (item?.type === 'reasoning' && item.encrypted_content) {
@@ -241,13 +237,15 @@ export class OpenAIResponsesFormat implements FormatAdapter {
         emitFunctionCallChunk(chunk, item, streamState);
       }
     } else if (event === 'response.completed') {
-      if (data.usage) {
+      const usage = data.usage ?? data.response?.usage;
+      if (usage) {
         chunk.usageMetadata = {
-          promptTokenCount: data.usage.input_tokens,
-          candidatesTokenCount: data.usage.output_tokens,
-          totalTokenCount: data.usage.total_tokens,
+          promptTokenCount: usage.input_tokens,
+          candidatesTokenCount: usage.output_tokens,
+          totalTokenCount: usage.total_tokens,
         };
       }
+      flushPendingFunctionCalls(chunk, streamState);
     }
 
     return chunk;
@@ -327,7 +325,7 @@ function rememberPendingFunctionCall(
   if (!itemKey) return undefined;
 
   const pending = state.pendingFunctionCalls.get(itemKey) ?? { argumentsText: '' };
-  const callId = normalizeCallId(item.call_id) ?? normalizeCallId(item.id);
+  const callId = normalizeCallId(item.call_id) ?? pending.callId ?? normalizeCallId(item.id);
   if (callId) pending.callId = callId;
   if (typeof item.name === 'string' && item.name.trim()) pending.name = item.name;
   if (typeof item.arguments === 'string') {
@@ -387,6 +385,12 @@ function emitFunctionCallChunk(
 
   chunk.functionCalls = [...(chunk.functionCalls ?? []), functionCall];
   chunk.partsDelta = [...(chunk.partsDelta ?? []), functionCall];
+}
+
+function flushPendingFunctionCalls(chunk: LLMStreamChunk, state: OpenAIResponsesStreamState): void {
+  for (const itemKey of [...state.pendingFunctionCalls.keys()]) {
+    emitFunctionCallChunk(chunk, itemKey, state);
+  }
 }
 
 function tryCreateFunctionCallPart(item: any): FunctionCallPart | undefined {
