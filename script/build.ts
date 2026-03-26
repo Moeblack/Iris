@@ -187,7 +187,7 @@ for (const target of targets) {
     binaries[npmPackageName] = version
     console.log(`  ✓ ${dirName} built successfully`)
   } catch (err) {
-    console.error(`  ✗ ${packageName} build failed:`, err)
+    console.error(`  ✗ ${dirName} build failed:`, err)
   }
 }
 
