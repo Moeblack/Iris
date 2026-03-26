@@ -221,13 +221,6 @@ export function InputBar({ disabled, isGenerating, queueSize, onSubmit, onPriori
 
   return (
     <box flexDirection="column">
-      {/* 生成中排队提示 */}
-      {isQueueMode && queueSize > 0 && (
-        <box paddingLeft={1} paddingBottom={0}>
-          <text fg={C.warn}>{`📨 ${queueSize} 条排队中`}</text>
-          <text fg={C.dim}>{'  /queue 管理'}</text>
-        </box>
-      )}
 
       {/* 指令列表（向上展开，位于输入框上方） */}
       {filtered.length > 0 && (

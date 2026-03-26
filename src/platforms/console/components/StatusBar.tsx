@@ -33,7 +33,7 @@ export function StatusBar({ agentName, modeName, modelName, contextTokens, conte
           {queueSize != null && queueSize > 0 ? (
             <>
               <span fg={C.dim}> · </span>
-              <span fg={C.warn}>📨 {queueSize} queued</span>
+              <span fg={C.warn}>{queueSize} 条排队中</span>
             </>
           ) : null}
         </text>
