@@ -22,7 +22,7 @@
 无需安装 Bun 或其他运行时。自动下载当前平台的预编译二进制。
 
 ```bash
-npm install -g iris-ai
+npm install -g irisagent
 iris start
 ```
 
@@ -31,13 +31,13 @@ iris start
 **Linux / macOS**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lianues/Iris/main/deploy/linux/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Lianues/IrisAgent/main/deploy/linux/install.sh | bash
 iris start
 ```
 
 **Windows**
 
-从 [GitHub Release](https://github.com/Lianues/Iris/releases) 下载 `iris-windows-x64.zip`，解压后双击 `deploy\windows\install.bat`。
+从 [GitHub Release](https://github.com/Lianues/IrisAgent/releases) 下载 `iris-windows-x64.zip`，解压后双击 `deploy\windows\install.bat`。
 
 ```bat
 REM 启动
@@ -59,7 +59,7 @@ Linux 额外支持 systemd 服务管理（`iris service start/stop/status`）。
 ### 方式三：源码开发
 
 ```bash
-git clone https://github.com/Lianues/Iris.git
+git clone https://github.com/Lianues/IrisAgent.git
 cd Iris
 ```
 
@@ -305,3 +305,9 @@ npm run test             # 测试（Vitest）
 bun run dev              # 启动（含 console TUI）
 bun run build:compile    # 编译为独立二进制
 ```
+
+## 许可证
+
+本项目采用 GNU General Public License v3.0 发布，对应 SPDX 标识为 `GPL-3.0-only`。
+
+完整条款见 [LICENSE](LICENSE)。

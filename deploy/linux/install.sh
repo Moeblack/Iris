@@ -2,7 +2,7 @@
 # ==========================================
 #  Iris 一键安装脚本
 #
-#  用法：curl -fsSL https://raw.githubusercontent.com/Lianues/Iris/main/deploy/linux/install.sh | bash
+#  用法：curl -fsSL https://raw.githubusercontent.com/Lianues/IrisAgent/main/deploy/linux/install.sh | bash
 #
 #  支持环境：
 #  - Linux (x64 / arm64)：Ubuntu, Debian, CentOS, Fedora, Alpine, Arch ...
@@ -28,9 +28,9 @@ set -euo pipefail
 
 # ── 全局变量 ─────────────────────────────
 IRIS_VERSION="${IRIS_VERSION:-latest}"
-REPO_URL="${IRIS_REPO_URL:-https://github.com/Lianues/Iris.git}"
+REPO_URL="${IRIS_REPO_URL:-https://github.com/Lianues/IrisAgent.git}"
 REPO_BRANCH="${IRIS_REPO_BRANCH:-main}"
-GH_REPO="Lianues/Iris"
+GH_REPO="Lianues/IrisAgent"
 NODE_MAJOR=22
 SERVICE_NAME="iris"
 IS_TERMUX=false

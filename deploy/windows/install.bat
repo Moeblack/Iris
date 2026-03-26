@@ -16,7 +16,7 @@ REM  用法：双击运行，或在命令行执行 install.bat
 REM ==========================================
 
 set "NODE_VERSION=22.16.0"
-set "GH_REPO=Lianues/Iris"
+set "GH_REPO=Lianues/IrisAgent"
 
 REM 项目根目录（deploy\windows 的上两级）
 set "INSTALL_DIR=%~dp0..\.."

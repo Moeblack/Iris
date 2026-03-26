@@ -9,7 +9,7 @@
  *   dist/bin/iris-linux-x64/      → npm publish (平台包)
  *   dist/bin/iris-darwin-arm64/    → npm publish (平台包)
  *   dist/bin/iris-windows-x64/    → npm publish (平台包)
- *   dist/bin/irises/             → npm publish (包装器包)
+ *   dist/bin/irisagent/             → npm publish (包装器包)
  *
  * 用法：
  *   bun run script/publish.ts
@@ -54,7 +54,7 @@ if (Object.keys(binaries).length === 0) {
 console.log("待发布的平台包:", binaries)
 
 const version = Object.values(binaries)[0]
-const wrapperName = "irises"
+const wrapperName = "irisagent"
 
 // 生成 npm 包装器
 const wrapperDir = path.join(distBinDir, wrapperName)
@@ -91,7 +91,7 @@ fs.writeFileSync(
       name: wrapperName,
       version,
       description: pkg.description ?? "Iris AI Agent",
-      license: pkg.license ?? "MIT",
+      license: pkg.license ?? "GPL-3.0-only",
       bin: {
         iris: "./bin/iris",
       },

@@ -113,7 +113,7 @@ for (const item of targets) {
           },
           os: [item.os],
           cpu: [item.arch],
-          license: pkg.license ?? "MIT",
+          license: pkg.license ?? "GPL-3.0-only",
         },
         null,
         2,

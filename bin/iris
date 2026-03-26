@@ -4,7 +4,7 @@
  * Iris npm 启动器
  *
  * 纯 Node.js 脚本，负责查找并执行当前平台对应的预编译 Iris 二进制。
- * 该脚本随 npm 包装器包 (iris-ai) 一起发布，用户通过 npm install -g iris-ai 安装后
+ * 该脚本随 npm 包装器包 (irisagent) 一起发布，用户通过 npm install -g irisagent 安装后
  * 即可直接执行 iris 命令。
  *
  * 二进制查找优先级：

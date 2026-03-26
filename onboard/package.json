@@ -2,6 +2,7 @@
   "name": "iris-onboard",
   "version": "1.0.0",
   "description": "Iris 交互式配置引导工具 (OpenTUI)",
+  "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "bun run src/index.tsx",

@@ -11,7 +11,7 @@
 #
 #  分发渠道：
 #  1. GitHub Release：二进制 tar.gz / zip
-#  2. npm：iris-ai 包装器包 + 平台二进制包
+#  2. npm：irisagent 包装器包 + 平台二进制包
 # ==========================================
 
 name: Build & Release
