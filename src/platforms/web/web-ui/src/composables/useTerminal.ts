@@ -16,6 +16,7 @@ import { loadAuthToken } from '../utils/authToken'
 function getThemeColors(): Record<string, string> {
   const style = getComputedStyle(document.documentElement)
   return {
+    terminalBg: style.getPropertyValue('--terminal-bg').trim(),
     bgCanvas: style.getPropertyValue('--bg-canvas').trim(),
     textPrimary: style.getPropertyValue('--text-primary').trim(),
     textSecondary: style.getPropertyValue('--text-secondary').trim(),
@@ -39,11 +40,12 @@ function isLightBackground(color: string): boolean {
 }
 
 function buildXtermTheme(colors: Record<string, string>) {
-  const bg = colors.bgCanvas || '#090b16'
-  const light = isLightBackground(bg)
+  // 如果定义了 --terminal-bg（浅色模式强制深底），使用它并走深色配色
+  const bg = colors.terminalBg || colors.bgCanvas || '#090b16'
+  const light = !colors.terminalBg && isLightBackground(bg)
 
   if (light) {
-    // 浅色主题：所有 ANSI 颜色重映射为深色，确保在浅色背景上可见
+    // 浅色主题且无 terminal-bg 覆盖：ANSI 颜色重映射为深色
     return {
       background: bg,
       foreground: colors.textPrimary || '#1a1d2e',

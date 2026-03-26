@@ -119,6 +119,8 @@
   --shell-highlight: rgba(255, 255, 255, 0.68);
   --tint-rgb: 0, 0, 0;
   --shadow-accent: 0 0 0 1px rgba(110, 94, 255, 0.18), 0 24px 48px rgba(91, 76, 201, 0.12);
+  /* 终端在浅色模式下保持深色背景 */
+  --terminal-bg: #1e1e2e;
 }
 
 @media (max-width: 1366px) {

@@ -125,7 +125,7 @@
   flex: 1;
   min-height: 0;
   padding: 6px 4px;
-  background: var(--bg-canvas);
+  background: var(--terminal-bg, var(--bg-canvas));
 }
 
 /* xterm.js 终端填满容器 */
@@ -182,7 +182,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-canvas);
+  background: var(--terminal-bg, var(--bg-canvas));
   z-index: 2;
 }
 
