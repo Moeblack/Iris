@@ -132,20 +132,23 @@ iris --sidecar browser     → 内部：运行 browser sidecar
 ### 编译命令
 
 ```bash
-# 编译所有平台（CI 使用）
-bun run build:compile
+# 使用 Bun 编译所有平台（CI 使用）
+npm run build:compile
 
-# 仅编译当前平台（本地调试）
-bun run build:compile -- --single
+# 使用 Bun 仅编译当前平台（本地调试）
+npm run build:compile -- --single
 ```
+
+`build:compile` 的实际打包器仍然是 **Bun**（`bun run script/build.ts` + `Bun.build()`）。在执行 Bun 编译前，脚本会先通过 npm 安装 `react-devtools-core`。这是因为该依赖在当前环境下使用 Bun 安装时，包内容可能不完整，导致 `@opentui/react` 在 `Bun.build()` 阶段解析失败；改为在编译前由 npm 补齐后即可正常打包。
 
 ### 编译脚本 `script/build.ts`
 
 脚本执行以下步骤：
 
-1. 通过 `bun install --os="*" --cpu="*"` 安装所有平台的 opentui 原生依赖
-2. 对每个目标平台调用 `Bun.build()` 并指定 `compile` 选项，入口为 `src/main.ts`
-3. 在 `dist/bin/<平台名>/` 下生成二进制、`data/` 资源目录和平台包 `package.json`
+1. 通过 npm 补齐 `react-devtools-core` 依赖
+2. 通过 `bun install --os="*" --cpu="*"` 安装所有平台的 opentui 原生依赖
+3. 对每个目标平台调用 **`Bun.build()`** 并指定 `compile` 选项，入口为 `src/main.ts`
+4. 在 `dist/bin/<平台名>/` 下生成二进制、`data/` 资源目录和平台包 `package.json`
 
 编译时 `chromium-bidi` 和 `electron` 标记为 `external`。这两个是 Playwright 内部的可选依赖（BiDi 协议和 Electron 自动化），Iris 不使用，Playwright 内部有 try/catch 保护，运行时不影响正常的浏览器操作。
 
