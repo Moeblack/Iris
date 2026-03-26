@@ -87,9 +87,11 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 function resolvePublicDir(): string {
   const candidates = [
+    path.join(projectRoot, 'web-ui', 'dist'),
     path.join(MODULE_DIR, 'web-ui/dist'),
     path.resolve(process.cwd(), 'src/platforms/web/web-ui/dist'),
     path.resolve(process.cwd(), 'dist/platforms/web/web-ui/dist'),
+    path.join(projectRoot, 'public'),
     path.join(MODULE_DIR, 'public'),
     path.resolve(process.cwd(), 'src/platforms/web/public'),
     path.resolve(process.cwd(), 'dist/platforms/web/public'),

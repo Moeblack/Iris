@@ -10,15 +10,16 @@
 #
 #  工作流程：
 #  1. 检测系统、架构、环境（Linux / Termux）
-#  2. 安装运行时依赖（Node.js >= 18）
+#  2. 安装脚本依赖（curl / git）
 #  3. 从 GitHub Release 下载预编译包并解压
-#  4. 初始化配置模板
+#  4. 初始化用户数据目录与配置模板
 #  5. 安装全局 iris 命令
 #  6. 安装 systemd 服务（仅 Linux，不立即启动）
 #
 #  环境变量（可覆盖默认值）：
 #    IRIS_VERSION          Release tag，默认 latest
 #    IRIS_INSTALL_DIR      安装目录，默认 /opt/iris 或 $HOME/iris (Termux)
+#    IRIS_DATA_DIR         运行时数据目录，默认 /opt/iris/.iris 或 ~/.iris
 #    IRIS_REPO_URL         GitHub 仓库 URL（仅 fallback 构建时使用）
 #    IRIS_REPO_BRANCH      分支名（仅 fallback 构建时使用）
 #    IRIS_MIRROR           下载镜像前缀，如 https://ghproxy.com/
@@ -37,6 +38,7 @@ IS_TERMUX=false
 IS_ROOT=false
 INSTALL_DIR=""   # 稍后根据环境决定
 BIN_DIR=""       # 同上
+APP_DATA_DIR=""  # 运行时数据目录（配置、会话、日志）
 MIRROR_PREFIX="${IRIS_MIRROR:-}"
 
 # ── 颜色输出 ─────────────────────────────
@@ -106,8 +108,18 @@ detect_environment() {
         mkdir -p "$BIN_DIR"
     fi
 
+    # ── 决定运行时数据目录
+    if [ -n "${IRIS_DATA_DIR:-}" ]; then
+        APP_DATA_DIR="$IRIS_DATA_DIR"
+    elif $IS_ROOT && ! $IS_TERMUX; then
+        APP_DATA_DIR="$INSTALL_DIR/.iris"
+    else
+        APP_DATA_DIR="$HOME/.iris"
+    fi
+
     info "安装目录：$INSTALL_DIR"
     info "CLI 路径：$BIN_DIR/iris"
+    info "数据目录：$APP_DATA_DIR"
 }
 
 detect_os() {
@@ -162,7 +174,7 @@ install_dependencies() {
         return
     fi
 
-    # Linux：预编译包只需要 Node.js 和 curl/git，不需要 build-essential
+    # Linux：预编译包安装只需要 curl/git，不需要 Node.js 和构建工具链
     local need_install=false
     for cmd in curl git; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -315,7 +327,6 @@ download_and_extract() {
 fallback_build() {
     step "回退：源码克隆与构建"
 
-    # Linux 需要编译工具链（native addon）
     if ! $IS_TERMUX && $IS_ROOT; then
         case "$OS" in
             ubuntu|debian|linuxmint|pop)
@@ -330,43 +341,49 @@ fallback_build() {
         esac
     fi
 
-    # 安装 bun（构建需要）
+    install_node
+
     if ! command -v bun &>/dev/null; then
         info "安装 Bun..."
         curl -fsSL https://bun.sh/install | bash
         export PATH="$HOME/.bun/bin:$PATH"
     fi
 
-    if [ -d "$INSTALL_DIR/.git" ]; then
-        info "项目已存在，拉取最新代码..."
-        cd "$INSTALL_DIR"
-        git pull origin "$REPO_BRANCH" 2>/dev/null || warn "git pull 失败，继续使用现有代码"
-    else
-        info "正在克隆 Iris..."
-        local tmp_dir
-        tmp_dir=$(mktemp -d)
-        git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$tmp_dir"
-        mkdir -p "$INSTALL_DIR"
-        cp -rT "$tmp_dir" "$INSTALL_DIR" 2>/dev/null || cp -a "$tmp_dir/." "$INSTALL_DIR/"
-        rm -rf "$tmp_dir"
-    fi
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
 
-    cd "$INSTALL_DIR"
+    info "正在克隆 Iris..."
+    git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$tmp_dir"
+
+    cd "$tmp_dir"
 
     info "安装依赖..."
     bun install 2>&1 | tail -5
     if [ -d src/platforms/web/web-ui ]; then
-        cd src/platforms/web/web-ui && npm install 2>&1 | tail -5 && cd "$INSTALL_DIR"
+        cd src/platforms/web/web-ui && npm install 2>&1 | tail -5 && cd "$tmp_dir"
     fi
 
-    info "构建项目..."
-    bun run build 2>&1 | tail -5
+    info "构建 Web UI..."
+    npm run build:ui 2>&1 | tail -5
+
+    info "构建二进制发布包..."
+    bun run build:compile -- --single 2>&1 | tail -5
+
+    local package_dir="$tmp_dir/dist/bin/irisagent-linux-${ARCH}"
+    if [ ! -d "$package_dir" ]; then
+        rm -rf "$tmp_dir"
+        die "未找到构建产物：$package_dir"
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    cp -a "$package_dir/." "$INSTALL_DIR/"
+    rm -rf "$tmp_dir"
 
     if $IS_ROOT && id -u iris &>/dev/null 2>&1; then
         chown -R iris:iris "$INSTALL_DIR"
     fi
 
-    info "源码构建完成"
+    info "源码编译完成并已安装到 $INSTALL_DIR"
 }
 
 # ==========================================
@@ -394,8 +411,10 @@ create_user() {
 init_config() {
     step "初始化配置"
 
-    local config_dir="$INSTALL_DIR/data/configs"
+    local config_dir="$APP_DATA_DIR/configs"
     local example_dir="$INSTALL_DIR/data/configs.example"
+
+    mkdir -p "$APP_DATA_DIR"
 
     if [ -d "$config_dir" ] && [ "$(ls -A "$config_dir" 2>/dev/null)" ]; then
         info "配置已存在，跳过初始化（运行 iris onboard 可重新配置）"
@@ -409,9 +428,8 @@ init_config() {
         fi
     fi
 
-    # Termux / 非 root：确保当前用户拥有目录
-    if ! $IS_ROOT; then
-        mkdir -p "$INSTALL_DIR/data/sessions"
+    if $IS_ROOT && id -u iris &>/dev/null 2>&1; then
+        chown -R iris:iris "$APP_DATA_DIR"
     fi
 }
 
@@ -423,8 +441,8 @@ verify_onboard() {
     if [ -x "$onboard_bin" ]; then
         info "iris-onboard 已就绪：$onboard_bin"
     else
-        warn "iris-onboard 未包含在安装包中（fallback 构建模式不含 onboard 二进制）"
-        warn "你仍然可以手动编辑配置文件：$INSTALL_DIR/data/configs/"
+        warn "iris-onboard 未包含在安装包中"
+        warn "你仍然可以手动编辑配置文件：$APP_DATA_DIR/configs/"
     fi
 }
 
@@ -433,39 +451,42 @@ install_cli() {
 
     local cli_path="$BIN_DIR/iris"
 
-    # 生成 CLI wrapper，内嵌安装目录
     cat > "$cli_path" << CLIEOF
 #!/usr/bin/env bash
 # Iris CLI Wrapper (自动生成)
 set -euo pipefail
 
 IRIS_DIR="$INSTALL_DIR"
+IRIS_INSTALL_DIR="$INSTALL_DIR"
+IRIS_DATA_DIR="$APP_DATA_DIR"
 
 RED='\\033[0;31m'
 GREEN='\\033[0;32m'
 CYAN='\\033[0;36m'
 BOLD='\\033[1m'
 NC='\\033[0m'
+export IRIS_INSTALL_DIR
+export IRIS_DATA_DIR
 
 case "\${1:-start}" in
     onboard)
-        if [ -x "\$IRIS_DIR/bin/iris-onboard" ]; then
-            exec "\$IRIS_DIR/bin/iris-onboard" "\$IRIS_DIR"
+        if [ -x "\$IRIS_DIR/bin/iris" ]; then
+            export IRIS_DATA_DIR
+            exec "\$IRIS_DIR/bin/iris" onboard
         else
-            echo -e "\${RED}iris-onboard 未安装\${NC}"
-            echo "请手动编辑配置：\$IRIS_DIR/data/configs/"
+            echo -e "\${RED}未找到 Iris 主二进制。\${NC}"
             exit 1
         fi
         ;;
 
     start|"")
-        if [ ! -f "\$IRIS_DIR/dist/index.js" ]; then
-            echo -e "\${RED}Iris 尚未构建。\${NC}"
+        if [ ! -x "\$IRIS_DIR/bin/iris" ]; then
+            echo -e "\${RED}Iris 二进制不存在。\${NC}"
             exit 1
         fi
         echo -e "\${GREEN}正在启动 Iris...\${NC}"
-        cd "\$IRIS_DIR"
-        exec node dist/index.js
+        export IRIS_DATA_DIR
+        exec "\$IRIS_DIR/bin/iris" start
         ;;
 
     service)
@@ -501,7 +522,7 @@ case "\${1:-start}" in
         echo "  update             更新到最新版本"
         echo "  help               显示此帮助"
         echo ""
-        echo "配置文件：\$IRIS_DIR/data/configs/"
+        echo "配置文件：\$IRIS_DATA_DIR/configs/"
         echo ""
         ;;
 
@@ -533,21 +554,35 @@ install_service() {
 
     if ! command -v systemctl &>/dev/null; then
         warn "系统不支持 systemd，跳过服务安装"
-        warn "你可以手动启动：cd $INSTALL_DIR && node dist/index.js"
+        warn "你可以手动启动：IRIS_DATA_DIR=$APP_DATA_DIR $INSTALL_DIR/bin/iris start"
         return 0
     fi
 
-    local service_src="$INSTALL_DIR/deploy/linux/iris.service"
-    if [ ! -f "$service_src" ]; then
-        warn "服务文件不存在，跳过 systemd 安装"
-        return 0
-    fi
+    cat > /etc/systemd/system/iris.service <<SERVICEEOF
+[Unit]
+Description=Iris AI Chat Service
+After=network.target
 
-    cp "$service_src" /etc/systemd/system/iris.service
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/bin/iris serve
+User=iris
+Group=iris
+Environment=NODE_ENV=production
+Environment=IRIS_DATA_DIR=$APP_DATA_DIR
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$APP_DATA_DIR
 
-    if [ "$INSTALL_DIR" != "/opt/iris" ]; then
-        sed -i "s|/opt/iris|$INSTALL_DIR|g" /etc/systemd/system/iris.service
-    fi
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
 
     systemctl daemon-reload
     systemctl enable iris
@@ -571,8 +606,8 @@ print_success() {
     echo -e "     ${BOLD}iris onboard${NC}"
     echo ""
     echo -e "  ${CYAN}2.${NC} 或手动编辑配置文件："
-    echo -e "     nano $INSTALL_DIR/data/configs/llm.yaml"
-    echo -e "     nano $INSTALL_DIR/data/configs/platform.yaml"
+    echo -e "     nano $APP_DATA_DIR/configs/llm.yaml"
+    echo -e "     nano $APP_DATA_DIR/configs/platform.yaml"
     echo ""
     echo -e "  ${CYAN}3.${NC} 启动："
 
@@ -612,7 +647,6 @@ main() {
     detect_environment
     detect_os
     install_dependencies
-    install_node
     create_user
     download_and_extract
     init_config

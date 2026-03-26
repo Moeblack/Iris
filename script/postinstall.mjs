@@ -3,8 +3,8 @@
 /**
  * Iris npm postinstall 脚本
  *
- * 在 npm install 完成后自动执行，将当前平台的预编译二进制
- * 硬链接（或复制）到 bin/.iris，供启动器脚本直接调用。
+ * 在 npm install 完成后自动执行，将当前平台的预编译主程序和 onboard 二进制
+ * 硬链接（或复制）到包装器包的 bin/.iris 与 bin/.iris-onboard，供统一入口调用。
  */
 
 import fs from "fs"
@@ -25,57 +25,76 @@ function detectPlatformAndArch() {
   return { platform, arch }
 }
 
-function findBinary() {
+function resolvePackageDir() {
   const { platform, arch } = detectPlatformAndArch()
   const packageName = `irisagent-${platform}-${arch}`
-  const binaryName = platform === "windows" ? "iris.exe" : "iris"
-
   try {
     const packageJsonPath = require.resolve(`${packageName}/package.json`)
-    const packageDir = path.dirname(packageJsonPath)
-    const binaryPath = path.join(packageDir, "bin", binaryName)
-
-    if (!fs.existsSync(binaryPath)) {
-      throw new Error(`Binary not found at ${binaryPath}`)
+    return {
+      packageName,
+      packageDir: path.dirname(packageJsonPath),
+      platform,
     }
-
-    return { binaryPath, binaryName }
   } catch (error) {
     throw new Error(`Could not find package ${packageName}: ${error.message}`)
+  }
+}
+
+function resolveBinaryPaths() {
+  const { packageName, packageDir, platform } = resolvePackageDir()
+  const suffix = platform === "windows" ? ".exe" : ""
+  const binaries = {
+    main: path.join(packageDir, "bin", `iris${suffix}`),
+    onboard: path.join(packageDir, "bin", `iris-onboard${suffix}`),
+  }
+
+  for (const [kind, binaryPath] of Object.entries(binaries)) {
+    if (!fs.existsSync(binaryPath)) {
+      throw new Error(`Binary (${kind}) not found in ${packageName}: ${binaryPath}`)
+    }
+  }
+
+  return binaries
+}
+
+function linkOrCopy(sourcePath, targetPath) {
+  if (fs.existsSync(targetPath)) {
+    fs.unlinkSync(targetPath)
+  }
+
+  try {
+    fs.linkSync(sourcePath, targetPath)
+  } catch {
+    fs.copyFileSync(sourcePath, targetPath)
   }
 }
 
 async function main() {
   try {
     if (os.platform() === "win32") {
-      // Windows 下 bin 字段直接指向 .exe，无需额外操作
-      console.log("Windows detected: binary setup not needed (using packaged .exe)")
+      console.log("Windows detected: skip cached links, launcher will resolve packaged binaries directly")
       return
     }
 
-    const { binaryPath } = findBinary()
-    const target = path.join(__dirname, "bin", ".iris")
-
-    // 确保 bin 目录存在
+    const binaries = resolveBinaryPaths()
     const binDir = path.join(__dirname, "bin")
     if (!fs.existsSync(binDir)) {
       fs.mkdirSync(binDir, { recursive: true })
     }
 
-    // 移除旧链接
-    if (fs.existsSync(target)) fs.unlinkSync(target)
-
-    // 优先硬链接，失败则复制
-    try {
-      fs.linkSync(binaryPath, target)
-    } catch {
-      fs.copyFileSync(binaryPath, target)
+    const targets = {
+      main: path.join(binDir, ".iris"),
+      onboard: path.join(binDir, ".iris-onboard"),
     }
-    fs.chmodSync(target, 0o755)
-    console.log(`Iris binary linked: ${target} -> ${binaryPath}`)
+
+    for (const [kind, sourcePath] of Object.entries(binaries)) {
+      const targetPath = targets[kind]
+      linkOrCopy(sourcePath, targetPath)
+      fs.chmodSync(targetPath, 0o755)
+      console.log(`Iris ${kind} binary linked: ${targetPath} -> ${sourcePath}`)
+    }
   } catch (error) {
-    console.error("Failed to setup Iris binary:", error.message)
-    // postinstall 失败不应阻塞安装
+    console.error("Failed to setup Iris binaries:", error.message)
     process.exit(0)
   }
 }

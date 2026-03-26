@@ -1,6 +1,9 @@
 /**
  * 配置文件生成器
- * 将用户在 onboard 中的选择写入 data/configs/*.yaml
+ * 将用户在 onboard 中的选择写入运行时数据目录中的 configs/*.yaml。
+ *
+ * 模板文件从安装目录的 data/configs.example/ 读取，
+ * 目标目录与主程序保持一致：IRIS_DATA_DIR/configs 或 ~/.iris/configs。
  *
  * 采用合并模式：读取已有配置，追加/更新字段，不丢失用户手动添加的内容。
  *
@@ -8,8 +11,9 @@
  * - LLM 三步（provider / apiKey / model）是一个整体，任何一步跳过则整个模型条目不写入 llm.yaml
  * - platform 跳过则不修改 platform.yaml 的 type 和平台子配置
  */
+import os from "os"
 import { writeFileSync, readFileSync, mkdirSync, existsSync, copyFileSync, readdirSync } from "fs"
-import { join } from "path"
+import { join, resolve } from "path"
 import { stringify, parse } from "yaml"
 
 export interface OnboardConfig {
@@ -76,6 +80,14 @@ export const PROVIDER_LABELS: Record<string, string> = {
   claude: "Anthropic Claude",
 }
 
+export function resolveRuntimeDataDir(): string {
+  return resolve(process.env.IRIS_DATA_DIR || join(os.homedir(), ".iris"))
+}
+
+export function resolveRuntimeConfigDir(): string {
+  return join(resolveRuntimeDataDir(), "configs")
+}
+
 /**
  * 安全读取并解析已有的 YAML 文件，失败则返回空对象
  */
@@ -98,16 +110,14 @@ function readYamlSafe(filepath: string): Record<string, unknown> {
  * - platform.yaml：仅在 platform 步骤未跳过时才写入 type 和对应平台配置
  * - system.yaml / storage.yaml：仅在不存在时写入默认值（不受跳过影响）
  */
-export function writeConfigs(irisDir: string, config: OnboardConfig, skippedSteps: SkippedSteps): void {
-  const configDir = join(irisDir, "data", "configs")
-  const exampleDir = join(irisDir, "data", "configs.example")
+export function writeConfigs(installDir: string, config: OnboardConfig, skippedSteps: SkippedSteps): void {
+  const configDir = resolveRuntimeConfigDir()
+  const exampleDir = join(installDir, "data", "configs.example")
 
-  // 确保目录存在
   mkdirSync(configDir, { recursive: true })
 
-  // 先从 example 复制所有未存在的可选配置
   if (existsSync(exampleDir)) {
-    const exampleFiles = readdirSync(exampleDir).filter((f) => f.endsWith(".yaml"))
+    const exampleFiles = readdirSync(exampleDir).filter((file) => file.endsWith(".yaml"))
     for (const file of exampleFiles) {
       const target = join(configDir, file)
       if (!existsSync(target)) {
@@ -116,17 +126,11 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
     }
   }
 
-  // ── 合并写入 llm.yaml ──
-  // LLM 配置是一个整体：provider + apiKey + model 三步全部完成才有意义。
-  // 任何一步跳过都意味着用户没有提供完整的模型信息，此时不写入模型条目，
-  // 保留已有文件原样，避免写入半成品配置导致启动失败。
   const llmSkipped = skippedSteps.provider || skippedSteps.apiKey || skippedSteps.model
   if (!llmSkipped) {
     const llmPath = join(configDir, "llm.yaml")
     const existingLlm = readYamlSafe(llmPath)
     const modelKey = config.modelName || config.provider.replace(/-/g, "_")
-
-    // 保留已有的 models，追加/覆盖本次的模型
     const existingModels = (existingLlm.models && typeof existingLlm.models === "object")
       ? existingLlm.models as Record<string, unknown>
       : {}
@@ -147,8 +151,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
     writeYaml(llmPath, llmConfig, "LLM 配置（模型池）")
   }
 
-  // ── 合并写入 platform.yaml ──
-  // platform 跳过时不修改 type 和平台子配置，保留已有文件原样。
   if (!skippedSteps.platform) {
     const platformPath = join(configDir, "platform.yaml")
     const existingPlatform = readYamlSafe(platformPath)
@@ -158,7 +160,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
       type: config.platform,
     }
     if (config.platform === "web") {
-      // 保留已有的 web 配置（authToken、managementToken 等），仅更新 port 和 host
       const existingWeb = (existingPlatform.web && typeof existingPlatform.web === "object")
         ? existingPlatform.web as Record<string, unknown>
         : {}
@@ -169,7 +170,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
       }
     }
     if (config.platform === "wxwork") {
-      // 保留已有的 wxwork 配置（showToolStatus 等），仅更新 botId 和 secret
       const existingWxwork = (existingPlatform.wxwork && typeof existingPlatform.wxwork === "object")
         ? existingPlatform.wxwork as Record<string, unknown>
         : {}
@@ -180,7 +180,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
       }
     }
     if (config.platform === "telegram") {
-      // 保留已有的 telegram 配置（showToolStatus 等），仅更新 token
       const existingTg = (existingPlatform.telegram && typeof existingPlatform.telegram === "object")
         ? existingPlatform.telegram as Record<string, unknown>
         : {}
@@ -190,7 +189,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
       }
     }
     if (config.platform === "lark") {
-      // 保留已有的 lark 配置（showToolStatus 等），仅更新 appId 和 appSecret
       const existingLark = (existingPlatform.lark && typeof existingPlatform.lark === "object")
         ? existingPlatform.lark as Record<string, unknown>
         : {}
@@ -201,7 +199,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
       }
     }
     if (config.platform === "qq") {
-      // 保留已有的 qq 配置（groupMode、showToolStatus 等），仅更新 wsUrl 和 selfId
       const existingQQ = (existingPlatform.qq && typeof existingPlatform.qq === "object")
         ? existingPlatform.qq as Record<string, unknown>
         : {}
@@ -212,7 +209,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
       }
     }
     if (config.platform === "weixin") {
-      // 保留已有的 weixin 配置（showToolStatus 等）
       const existingWeixin = (existingPlatform.weixin && typeof existingPlatform.weixin === "object")
         ? existingPlatform.weixin as Record<string, unknown>
         : {}
@@ -223,8 +219,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
     writeYaml(platformPath, platformConfig, "平台配置")
   }
 
-  // ── 写入 system.yaml（仅不存在时）──
-  // 基础配置文件不受跳过影响，始终确保存在
   if (!existsSync(join(configDir, "system.yaml"))) {
     const systemConfig = {
       systemPrompt: "",
@@ -234,7 +228,6 @@ export function writeConfigs(irisDir: string, config: OnboardConfig, skippedStep
     writeYaml(join(configDir, "system.yaml"), systemConfig, "系统配置")
   }
 
-  // ── 写入 storage.yaml（仅不存在时）──
   if (!existsSync(join(configDir, "storage.yaml"))) {
     const storageConfig = {
       type: "json-file",

@@ -7,10 +7,10 @@
 #
 #  构建方式：
 #  使用 bun build --compile 为每个平台编译独立二进制。
-#  产物内嵌 Bun 运行时 + opentui + 全部依赖，用户无需安装任何运行时。
+#  产物包含主程序、onboard 配置引导、Web UI 静态资源和默认配置模板。
 #
 #  分发渠道：
-#  1. GitHub Release：二进制 tar.gz / zip
+#  1. GitHub Release：解压即用的二进制 tar.gz / zip
 #  2. npm：irisagent 包装器包 + 平台二进制包
 # ==========================================
 
@@ -26,7 +26,6 @@ permissions:
   contents: write
 
 jobs:
-  # ── 全平台构建 ─────────────────────
   build:
     name: Build (${{ matrix.platform }}-${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -53,6 +52,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -61,24 +65,30 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install Web UI dependencies
+        working-directory: src/platforms/web/web-ui
+        run: npm ci
+
+      - name: Build Web UI
+        run: npm run build:ui
+
       - name: Build binary (current platform)
         run: bun run build:compile -- --single
 
-      # 打包 GitHub Release 产物
       - name: Archive (Linux/macOS)
         if: matrix.platform != 'windows'
         run: |
           cd dist/bin/irisagent-${{ matrix.platform }}-${{ matrix.arch }}
-          tar czf "$GITHUB_WORKSPACE/irisagent-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" bin/ data/
+          tar czf "$GITHUB_WORKSPACE/irisagent-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" .
           echo "Archive size: $(du -sh $GITHUB_WORKSPACE/irisagent-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz | cut -f1)"
 
       - name: Archive (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/bin/irisagent-windows-${{ matrix.arch }}/bin/*","dist/bin/irisagent-windows-${{ matrix.arch }}/data/*" -DestinationPath "irisagent-windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path "dist/bin/irisagent-windows-${{ matrix.arch }}\*" -DestinationPath "irisagent-windows-${{ matrix.arch }}.zip"
 
-      - name: Upload artifact
+      - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: irisagent-${{ matrix.platform }}-${{ matrix.arch }}
@@ -87,7 +97,6 @@ jobs:
             irisagent-*.zip
           retention-days: 30
 
-      # 上传 npm 平台包产物（供 publish job 使用）
       - name: Upload npm package artifact
         uses: actions/upload-artifact@v4
         with:
@@ -95,7 +104,6 @@ jobs:
           path: dist/bin/irisagent-${{ matrix.platform }}-${{ matrix.arch }}/
           retention-days: 7
 
-  # ── 发布 GitHub Release ───────────────
   release:
     name: Create GitHub Release
     needs: [build]
@@ -124,7 +132,6 @@ jobs:
           generate_release_notes: true
           files: release/*
 
-  # ── 发布到 npm ───────────────────
   publish-npm:
     name: Publish to npm
     needs: [build]
@@ -146,7 +153,6 @@ jobs:
         with:
           bun-version: "1.2"
 
-      # 下载所有平台包产物
       - name: Download npm package artifacts
         uses: actions/download-artifact@v4
         with:

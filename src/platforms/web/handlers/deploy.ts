@@ -360,10 +360,11 @@ function buildServiceConfig(options: DeployFormOptions): string {
     '[Service]',
     'Type=simple',
     `WorkingDirectory=${options.deployPath}`,
-    'ExecStart=/usr/bin/node dist/index.js',
+    `ExecStart=${path.posix.join(options.deployPath, 'bin', 'iris')} serve`,
     `User=${options.user}`,
     `Group=${options.user}`,
     'Environment=NODE_ENV=production',
+    `Environment=IRIS_DATA_DIR=${path.posix.join(options.deployPath, '.iris')}`,
     'Restart=on-failure',
     'RestartSec=5',
     'StandardOutput=journal',
@@ -371,7 +372,7 @@ function buildServiceConfig(options: DeployFormOptions): string {
     'NoNewPrivileges=true',
     'ProtectSystem=strict',
     'ProtectHome=true',
-    `ReadWritePaths=${path.posix.join(options.deployPath, 'data')}`,
+    `ReadWritePaths=${path.posix.join(options.deployPath, '.iris')}`,
     '',
     '[Install]',
     'WantedBy=multi-user.target',
@@ -422,9 +423,9 @@ async function buildPreview(configDir: string, rawOptions: unknown): Promise<Dep
       if (!deployPathExists) {
         errors.push(`部署路径不存在：${options.deployPath}`)
       } else {
-        const distEntrypoint = path.join(options.deployPath, 'dist', 'index.js')
-        if (!(await pathExists(distEntrypoint))) {
-          warnings.push(`未检测到 ${distEntrypoint}，请确认已完成 npm run build`)
+        const binaryEntrypoint = path.join(options.deployPath, 'bin', 'iris')
+        if (!(await pathExists(binaryEntrypoint))) {
+          warnings.push(`未检测到 ${binaryEntrypoint}，请确认已解压 GitHub Release 或完成二进制构建`)
         }
       }
     }

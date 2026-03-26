@@ -4,13 +4,15 @@
  * Iris 全平台编译脚本
  *
  * 使用 bun build --compile 为每个目标平台生成独立可执行文件。
- * 产物内嵌 Bun 运行时 + opentui 原生库 + 全部依赖，无需外部运行时。
+ * 产物内嵌 Bun 运行时、依赖、Web UI 静态资源和 onboard 配置引导工具。
  *
  * 产物结构：
  *   dist/bin/irisagent-{platform}-{arch}/
- *     bin/iris(.exe)       编译后的二进制
- *     data/                配置模板和示例文件
- *     package.json         平台包描述
+ *     bin/iris(.exe)            编译后的主程序二进制
+ *     bin/iris-onboard(.exe)    交互式配置引导工具
+ *     data/                     配置模板和示例文件
+ *     web-ui/dist/              Web 平台静态资源
+ *     package.json              平台包描述
  *
  * 用法：
  *   bun run script/build.ts            # 编译所有平台
@@ -24,11 +26,17 @@ import { fileURLToPath } from "url"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const dir = path.resolve(__dirname, "..")
-process.chdir(dir)
+const rootDir = path.resolve(__dirname, "..")
+process.chdir(rootDir)
 
-const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"))
+const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"))
 const version: string = pkg.version
+const webUiDistDir = path.join(rootDir, "src", "platforms", "web", "web-ui", "dist")
+
+if (!fs.existsSync(webUiDistDir)) {
+  console.error("未找到 Web UI 构建产物，请先运行 npm run build:ui")
+  process.exit(1)
+}
 
 interface Target {
   os: string
@@ -36,16 +44,16 @@ interface Target {
 }
 
 const allTargets: Target[] = [
-  { os: "linux",  arch: "x64" },
-  { os: "linux",  arch: "arm64" },
+  { os: "linux", arch: "x64" },
+  { os: "linux", arch: "arm64" },
   { os: "darwin", arch: "arm64" },
   { os: "darwin", arch: "x64" },
-  { os: "win32",  arch: "x64" },
+  { os: "win32", arch: "x64" },
 ]
 
 const singleFlag = process.argv.includes("--single")
 const targets = singleFlag
-  ? allTargets.filter(t => t.os === process.platform && t.arch === process.arch)
+  ? allTargets.filter((target) => target.os === process.platform && target.arch === process.arch)
   : allTargets
 
 if (targets.length === 0) {
@@ -53,66 +61,109 @@ if (targets.length === 0) {
   process.exit(1)
 }
 
-// 清理旧产物
-const distBinDir = path.join(dir, "dist", "bin")
+const distBinDir = path.join(rootDir, "dist", "bin")
 if (fs.existsSync(distBinDir)) {
   try {
     fs.rmSync(distBinDir, { recursive: true, force: true })
   } catch (err: any) {
-    // Windows 下目录可能被其他进程占用，跳过清理继续编译（覆盖写入）
     console.warn(`警告: 无法清理旧产物目录 (${err.code || err.message})，将覆盖写入`)
   }
 }
 
-// 确保安装所有平台的 opentui 原生依赖
 const opentuiVersion = pkg.optionalDependencies?.["@opentui/core"] ?? "latest"
 await $`bun install --os="*" --cpu="*" @opentui/core@${opentuiVersion}`
 
+function getPlatformName(osName: string): string {
+  return osName === "win32" ? "windows" : osName
+}
+
+function formatBuildLogs(result: Awaited<ReturnType<typeof Bun.build>>): string {
+  return result.logs.map((entry) => entry.message).filter(Boolean).join("\n")
+}
+
+async function buildCompiledBinary(options: {
+  entrypoint: string
+  outfile: string
+  target: string
+  define?: Record<string, string>
+  external?: string[]
+  minify?: boolean
+}): Promise<void> {
+  const result = await Bun.build({
+    entrypoints: [options.entrypoint],
+    compile: {
+      target: options.target as any,
+      outfile: options.outfile,
+    },
+    define: options.define,
+    external: options.external,
+    minify: options.minify,
+  })
+
+  if (!result.success) {
+    const logs = formatBuildLogs(result)
+    throw new Error(logs || `构建失败: ${options.outfile}`)
+  }
+}
+
+function copyDirectoryIfExists(sourceDir: string, targetDir: string, label: string): void {
+  if (!fs.existsSync(sourceDir)) return
+  fs.cpSync(sourceDir, targetDir, { recursive: true })
+  console.log(`  ✓ ${label} copied`)
+}
+
 const binaries: Record<string, string> = {}
 
-for (const item of targets) {
-  const platformName = item.os === "win32" ? "windows" : item.os
-  const name = `irisagent-${platformName}-${item.arch}`
-  console.log(`\n=== Building ${name} ===`)
+for (const target of targets) {
+  const platformName = getPlatformName(target.os)
+  const packageName = `irisagent-${platformName}-${target.arch}`
+  const outDir = path.join(distBinDir, packageName)
+  const compileTarget = `bun-${target.os}-${target.arch}`
 
-  const outDir = path.join(distBinDir, name)
+  console.log(`\n=== Building ${packageName} ===`)
   fs.mkdirSync(path.join(outDir, "bin"), { recursive: true })
 
   try {
-    await Bun.build({
-      entrypoints: ["./src/main.ts"],
-      // Playwright 内部可选依赖，编译时无法解析，运行时不影响核心功能
-      external: ["chromium-bidi", "electron"],
-      compile: {
-        target: `bun-${item.os}-${item.arch}` as any,
-        outfile: `dist/bin/${name}/bin/iris`,
-      },
+    await buildCompiledBinary({
+      entrypoint: "./src/main.ts",
+      outfile: `dist/bin/${packageName}/bin/iris`,
+      target: compileTarget,
       define: {
         IRIS_VERSION: `'${version}'`,
       },
+      external: ["chromium-bidi", "electron"],
     })
+    console.log("  ✓ iris built")
 
-    // 复制 data/ 目录（配置模板和示例文件）
-    const dataSrc = path.join(dir, "data")
-    const dataDest = path.join(outDir, "data")
-    if (fs.existsSync(dataSrc)) {
-      fs.cpSync(dataSrc, dataDest, { recursive: true })
-      console.log(`  ✓ data/ copied`)
+    await buildCompiledBinary({
+      entrypoint: "./onboard/src/index.tsx",
+      outfile: `dist/bin/${packageName}/bin/iris-onboard`,
+      target: compileTarget,
+      minify: true,
+    })
+    console.log("  ✓ iris-onboard built")
+
+    copyDirectoryIfExists(path.join(rootDir, "data"), path.join(outDir, "data"), "data/")
+    copyDirectoryIfExists(webUiDistDir, path.join(outDir, "web-ui", "dist"), "web-ui/dist")
+
+    const licensePath = path.join(rootDir, "LICENSE")
+    if (fs.existsSync(licensePath)) {
+      fs.copyFileSync(licensePath, path.join(outDir, "LICENSE"))
+      console.log("  ✓ LICENSE copied")
     }
 
-    // 生成平台包 package.json
     fs.writeFileSync(
       path.join(outDir, "package.json"),
       JSON.stringify(
         {
-          name,
+          name: packageName,
           version,
-          description: `Prebuilt ${platformName}-${item.arch} binary for Iris`,
+          description: `Prebuilt ${platformName}-${target.arch} binary for IrisAgent`,
           bin: {
-            iris: item.os === "win32" ? "./bin/iris.exe" : "./bin/iris",
+            iris: target.os === "win32" ? "./bin/iris.exe" : "./bin/iris",
           },
-          os: [item.os],
-          cpu: [item.arch],
+          os: [target.os],
+          cpu: [target.arch],
           license: pkg.license ?? "GPL-3.0-only",
         },
         null,
@@ -120,10 +171,10 @@ for (const item of targets) {
       ),
     )
 
-    binaries[name] = version
-    console.log(`  ✓ ${name} built successfully`)
+    binaries[packageName] = version
+    console.log(`  ✓ ${packageName} built successfully`)
   } catch (err) {
-    console.error(`  ✗ ${name} build failed:`, err)
+    console.error(`  ✗ ${packageName} build failed:`, err)
   }
 }
 

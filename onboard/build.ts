@@ -2,11 +2,20 @@
  * Iris Onboard 构建脚本
  * 使用 bun build --compile 为各平台编译独立二进制
  */
+import path from "path"
 import { mkdir } from "fs/promises"
+import { fileURLToPath } from "url"
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+process.chdir(__dirname)
 
 const platforms = [
   { name: "linux-x64", target: "bun-linux-x64" },
   { name: "linux-arm64", target: "bun-linux-arm64" },
+  { name: "darwin-arm64", target: "bun-darwin-arm64" },
+  { name: "darwin-x64", target: "bun-darwin-x64" },
+  { name: "windows-x64", target: "bun-win32-x64" },
 ] as const
 
 async function build() {
@@ -14,9 +23,9 @@ async function build() {
 
   for (const platform of platforms) {
     const outfile = `dist/iris-onboard-${platform.name}`
-    console.log(`\n🔨 Building for ${platform.name}...`)
+    console.log(`\nBuilding for ${platform.name}...`)
 
-    await Bun.build({
+    const result = await Bun.build({
       entrypoints: ["./src/index.tsx"],
       compile: {
         outfile,
@@ -25,10 +34,15 @@ async function build() {
       minify: true,
     })
 
-    console.log(`✅ ${outfile}`)
+    if (!result.success) {
+      const message = result.logs.map((entry) => entry.message).filter(Boolean).join("\n")
+      throw new Error(message || `构建失败: ${outfile}`)
+    }
+
+    console.log(`Built ${outfile}`)
   }
 
-  console.log("\n🎉 All builds complete!")
+  console.log("\nAll onboard builds complete")
 }
 
 build().catch((err) => {

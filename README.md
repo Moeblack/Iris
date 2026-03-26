@@ -23,40 +23,52 @@
 
 ```bash
 npm install -g irisagent
+iris onboard
 iris start
 ```
 
-### 方式二：一键安装脚本
+### 方式二：直接下载 GitHub Release
 
-**Linux / macOS**
+GitHub Release 提供的是“解压即用”的二进制包。压缩包内包含：
+
+- `bin/iris` 或 `bin/iris.exe`
+- `bin/iris-onboard` 或 `bin/iris-onboard.exe`
+- `data/` 默认配置模板
+- `web-ui/dist/` Web 平台静态资源
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lianues/IrisAgent/main/deploy/linux/install.sh | bash
-iris start
+# Linux / macOS
+curl -LO https://github.com/Lianues/IrisAgent/releases/latest/download/irisagent-<platform>-<arch>.tar.gz
+mkdir -p irisagent && tar xzf irisagent-<platform>-<arch>.tar.gz -C irisagent
+cd irisagent
+./bin/iris onboard
+./bin/iris start
 ```
 
 **Windows**
 
-从 [GitHub Release](https://github.com/Lianues/IrisAgent/releases) 下载 `irisagent-windows-x64.zip`，解压后双击 `deploy\windows\install.bat`。
+从 [GitHub Release](https://github.com/Lianues/IrisAgent/releases) 下载 `irisagent-windows-x64.zip`，解压后运行：
 
 ```bat
-REM 启动
-iris start
+bin\iris.exe onboard
+bin\iris.exe start
 ```
 
-**安装流程（Windows / Linux 统一）：**
+### 方式三：Linux 一键安装脚本（可选）
 
-1. 从 GitHub Release 下载预编译二进制
-2. 运行 **onboard 交互式配置引导**（选择 LLM 提供商、填写 API Key、选择平台）
-3. 生成 `iris` CLI 命令
+脚本会下载 GitHub Release 的二进制包，初始化 `IRIS_DATA_DIR`，并安装 `iris` 命令。
 
-安装完成后只需 `iris start` 启动，`iris onboard` 可随时重新配置。
+```bash
+curl -fsSL https://raw.githubusercontent.com/Lianues/IrisAgent/main/deploy/linux/install.sh | bash
+iris onboard
+iris start
+```
 
 Linux 额外支持 systemd 服务管理（`iris service start/stop/status`）。
 
 支持 Ubuntu、Debian、CentOS、Fedora、Alpine、Arch、Termux (Android)、macOS 以及 Windows x64。
 
-### 方式三：源码开发
+### 方式四：源码开发
 
 ```bash
 git clone https://github.com/Lianues/IrisAgent.git
@@ -80,14 +92,14 @@ bun run dev            # 启动（直接使用 Bun 运行时）
 
 > Console 平台（TUI 界面）依赖 [OpenTUI](https://opentui.com/) 的 Bun FFI，因此仅在 Bun 运行时下可用。其他平台在 Node.js 和 Bun 下均可正常运行。
 
-复制配置模板并编辑：
+如需手动准备配置目录，可先复制模板到运行时数据目录：
 
 ```bash
 # macOS / Linux
-cp -r data/configs.example data/configs
+mkdir -p ~/.iris/configs && cp data/configs.example/*.yaml ~/.iris/configs/
 
 # Windows PowerShell
-Copy-Item -Recurse data/configs.example data/configs
+New-Item -ItemType Directory -Force "$HOME/.iris/configs" | Out-Null; Copy-Item data/configs.example/*.yaml "$HOME/.iris/configs/"
 ```
 
 ### Onboard 交互式配置引导
@@ -95,11 +107,15 @@ Copy-Item -Recurse data/configs.example data/configs
 Iris 提供 TUI 配置引导工具，基于 [OpenTUI](https://opentui.com/) + React 构建：
 
 ```bash
-# 一键安装时自动运行，也可手动启动
+# npm 安装或已加入 PATH 时
 iris onboard
-# 或直接运行二进制
-./bin/iris-onboard /path/to/iris
+
+# 直接运行发行包中的二进制
+./bin/iris onboard
+# 或 ./bin/iris-onboard
 ```
+
+Onboard 会从当前安装目录读取 `data/configs.example/` 模板，并将配置写入 `IRIS_DATA_DIR/configs`；未设置 `IRIS_DATA_DIR` 时，默认写入 `~/.iris/configs`。
 
 配置流程：
 
@@ -108,7 +124,7 @@ iris onboard
 3. **输入 API Key** — 带遮罩的密码输入
 4. **模型配置** — 模型别名、模型 ID、Base URL（提供默认值）
 5. **选择平台** — Console / Web / Telegram / 企业微信 / 飞书 / QQ
-6. **确认写入** — 预览配置并写入 `data/configs/*.yaml`
+6. **确认写入** — 预览配置并写入 `IRIS_DATA_DIR/configs/*.yaml`（默认 `~/.iris/configs/*.yaml`）
 
 ## 配置文件
 

@@ -12,10 +12,10 @@ type Step = "welcome" | "provider" | "apiKey" | "model" | "platform" | "summary"
 type SkippableStep = "provider" | "apiKey" | "model" | "platform"
 
 interface AppProps {
-  irisDir: string
+  installDir: string
 }
 
-export function App({ irisDir }: AppProps) {
+export function App({ installDir }: AppProps) {
   const [step, setStep] = useState<Step>("welcome")
   const [config, setConfig] = useState<OnboardConfig>({
     provider: "gemini",
@@ -44,9 +44,6 @@ export function App({ irisDir }: AppProps) {
     setConfig((prev) => ({ ...prev, ...partial }))
   }
 
-  // 统一记录“跳过此环节”的状态。
-  // 这样做的目的是让汇总页能够明确提示哪些字段是用户主动跳过的，
-  // 而不是把空值和默认值误判为用户已经完整填写。
   const setStepSkipped = (targetStep: SkippableStep, skipped: boolean) => {
     setSkippedSteps((prev) => ({
       ...prev,
@@ -56,9 +53,7 @@ export function App({ irisDir }: AppProps) {
 
   const handleConfirm = () => {
     try {
-      // 将跳过状态传入 writeConfigs，被跳过的步骤不会写入对应配置文件
-      writeConfigs(irisDir, config, skippedSteps as SkippedSteps)
-      // 延迟退出，让用户看到成功信息
+      writeConfigs(installDir, config, skippedSteps as SkippedSteps)
       setTimeout(() => gracefulExit(), 3000)
     } catch (err) {
       console.error("写入配置失败:", err)
@@ -68,7 +63,6 @@ export function App({ irisDir }: AppProps) {
 
   return (
     <box flexDirection="column">
-      {/* 进度条 */}
       <box paddingLeft={1} paddingRight={1}>
         <text>
           <span fg={step === "welcome" ? "#6c5ce7" : "#636e72"}>{"● "}</span>
@@ -92,8 +86,6 @@ export function App({ irisDir }: AppProps) {
             setStepSkipped("provider", false)
           }}
           onSkip={() => {
-            // 跳过 provider：不修改 config，保留初始默认值 "gemini"
-            // 写入时会检测到跳过，整个 llm 模型条目不写入
             setStepSkipped("provider", true)
             setStep("apiKey")
           }}
@@ -110,8 +102,6 @@ export function App({ irisDir }: AppProps) {
             setStepSkipped("apiKey", false)
           }}
           onSkip={() => {
-            // 跳过 apiKey：不修改 config，apiKey 和 baseUrl 保持原值
-            // 写入时会检测到跳过，整个 llm 模型条目不写入
             setStepSkipped("apiKey", true)
             setStep("model")
           }}
@@ -130,8 +120,6 @@ export function App({ irisDir }: AppProps) {
             setStepSkipped("model", false)
           }}
           onSkip={() => {
-            // 跳过 model：不修改 config，model 和 modelName 保持原值
-            // 写入时会检测到跳过，整个 llm 模型条目不写入
             setStepSkipped("model", true)
             setStep("platform")
           }}
@@ -157,8 +145,6 @@ export function App({ irisDir }: AppProps) {
             setStepSkipped("platform", false)
           }}
           onSkip={() => {
-            // 跳过 platform：不修改 config，保留初始默认值 "console"
-            // 写入时会检测到跳过，platform.yaml 不会被修改
             setStepSkipped("platform", true)
             setStep("summary")
           }}
@@ -170,6 +156,7 @@ export function App({ irisDir }: AppProps) {
         <Summary
           config={config}
           skippedSteps={skippedSteps}
+          installDir={installDir}
           onConfirm={handleConfirm}
           onBack={() => setStep("platform")}
         />

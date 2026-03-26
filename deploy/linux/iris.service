@@ -1,17 +1,15 @@
 # ==========================================
 #  Iris systemd 服务文件
 #
-#  此文件与 Web 部署生成器的默认输出保持一致：
-#  - 部署路径: /opt/iris
-#  - 运行用户: iris
+#  默认部署路径: /opt/iris
+#  默认运行用户: iris
+#  默认数据目录: /opt/iris/.iris
 #
 #  使用方法：
-#  1. 将此文件复制到 /etc/systemd/system/iris.service
-#  2. 根据实际情况修改 WorkingDirectory 和 User
+#  1. 复制到 /etc/systemd/system/iris.service
+#  2. 根据实际情况修改 WorkingDirectory、ExecStart、User、IRIS_DATA_DIR
 #  3. systemctl daemon-reload
 #  4. systemctl enable --now iris
-#
-#  如果将来打包成 exe，只需将 ExecStart 改为 exe 路径即可
 # ==========================================
 
 [Unit]
@@ -20,33 +18,20 @@ After=network.target
 
 [Service]
 Type=simple
-
-# ← 替换为实际部署路径
 WorkingDirectory=/opt/iris
-
-# Node.js 启动命令（打包 exe 后改为：ExecStart=/opt/iris/iris）
-ExecStart=/usr/bin/node dist/index.js
-
-# 运行用户（建议创建专用用户：useradd -r -s /bin/false iris）
+ExecStart=/opt/iris/bin/iris serve
 User=iris
 Group=iris
-
-# 环境变量
 Environment=NODE_ENV=production
-
-# 崩溃自动重启
+Environment=IRIS_DATA_DIR=/opt/iris/.iris
 Restart=on-failure
 RestartSec=5
-
-# 日志输出到 journald（通过 journalctl -u iris 查看）
 StandardOutput=journal
 StandardError=journal
-
-# 安全加固
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/iris/data
+ReadWritePaths=/opt/iris/.iris
 
 [Install]
 WantedBy=multi-user.target

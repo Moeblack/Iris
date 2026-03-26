@@ -1,13 +1,18 @@
 /**
  * Iris Onboard — 交互式配置引导工具
  *
- * 用法：iris-onboard <iris-dir>
- *       iris-onboard              (默认使用当前工作目录)
- *       IRIS_DIR=/opt/iris iris-onboard  (通过环境变量指定)
+ * 用法：iris-onboard <iris-install-dir>
+ *       iris-onboard
+ *       IRIS_DIR=/opt/iris iris-onboard
+ *
+ * 安装目录用于读取 data/configs.example/ 模板。
+ * 配置实际写入 IRIS_DATA_DIR/configs 或 ~/.iris/configs。
  *
  * 使用 OpenTUI + React 构建 TUI 界面，
  * 通过 bun build --compile 编译成独立二进制。
  */
+import fs from "fs"
+import path from "path"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import { App } from "./App.js"
@@ -30,24 +35,33 @@ export function gracefulExit(code = 0): void {
     _renderer = null
     renderer.destroy()
   }
-  // 给 destroy 一点时间刷新终端序列
   setTimeout(() => process.exit(code), 50)
 }
 
-async function main() {
-  // 从命令行参数获取 Iris 安装目录。
-  // 生产部署时由 install 脚本传入（如 iris-onboard /opt/iris）。
-  // 本地开发时若未传参，则使用当前工作目录，避免写入到不存在的 /opt/iris 中。
-  const irisDir = process.argv[2]
-    || (process.env.IRIS_DIR)
-    || process.cwd()
+function resolveInstallDir(): string {
+  const cliArg = process.argv[2]
+  if (cliArg) return path.resolve(cliArg)
 
+  if (process.env.IRIS_DIR) {
+    return path.resolve(process.env.IRIS_DIR)
+  }
+
+  const executableInstallDir = path.resolve(path.dirname(process.execPath), "..")
+  if (fs.existsSync(path.join(executableInstallDir, "data", "configs.example"))) {
+    return executableInstallDir
+  }
+
+  return process.cwd()
+}
+
+async function main() {
+  const installDir = resolveInstallDir()
   const renderer = await createCliRenderer({
     exitOnCtrlC: true,
   })
   _renderer = renderer
 
-  createRoot(renderer).render(<App irisDir={irisDir} />)
+  createRoot(renderer).render(<App installDir={installDir} />)
 }
 
 main().catch((err) => {

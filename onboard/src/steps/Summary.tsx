@@ -1,17 +1,21 @@
+import path from "path"
 import { useState } from "react"
 import { useKeyboard } from "@opentui/react"
-import { PROVIDER_LABELS, type OnboardConfig } from "../utils/config-writer.js"
+import { PROVIDER_LABELS, resolveRuntimeConfigDir, type OnboardConfig } from "../utils/config-writer.js"
 import { gracefulExit } from "../index.js"
 
 interface SummaryProps {
   config: OnboardConfig
   skippedSteps: Record<"provider" | "apiKey" | "model" | "platform", boolean>
+  installDir: string
   onConfirm: () => void
   onBack: () => void
 }
 
-export function Summary({ config, skippedSteps, onConfirm, onBack }: SummaryProps) {
+export function Summary({ config, skippedSteps, installDir, onConfirm, onBack }: SummaryProps) {
   const [confirmed, setConfirmed] = useState(false)
+  const configDir = resolveRuntimeConfigDir()
+  const binaryPath = path.join(installDir, "bin", process.platform === "win32" ? "iris.exe" : "iris")
 
   useKeyboard((key) => {
     if (confirmed) return
@@ -173,7 +177,7 @@ export function Summary({ config, skippedSteps, onConfirm, onBack }: SummaryProp
         <box flexDirection="column" borderStyle="rounded" borderColor="#fdcb6e" padding={1}>
           <text fg="#fdcb6e"><b>提示</b></text>
           <text fg="#dfe6e9">你跳过了部分环节。写入后，相关字段可能使用默认值，或暂时保持为空。</text>
-          <text fg="#636e72">若后续启动失败，可直接编辑 data/configs/*.yaml 补全。</text>
+          <text fg="#636e72">若后续启动失败，可直接编辑 {configDir} 下的 YAML 文件补全。</text>
         </box>
       )}
 
@@ -182,15 +186,16 @@ export function Summary({ config, skippedSteps, onConfirm, onBack }: SummaryProp
       ) : (
         <box flexDirection="column" gap={1}>
           <text fg="#00b894"><b>✅ 配置已写入！</b></text>
+          <text fg="#dfe6e9">配置目录：{configDir}</text>
           <box flexDirection="column" paddingLeft={2}>
             <text fg="#dfe6e9">启动方式：</text>
             <text>
-              <span fg="#00b894">  iris service start</span>
-              <span fg="#636e72">  — 后台运行（systemd 服务）</span>
+              <span fg="#00b894">  iris start</span>
+              <span fg="#636e72">           — 已加入 PATH 或 npm 安装时使用</span>
             </text>
             <text>
-              <span fg="#00b894">  iris start</span>
-              <span fg="#636e72">          — 前台运行</span>
+              <span fg="#00b894">  {binaryPath} start</span>
+              <span fg="#636e72">  — 直接运行当前发行包</span>
             </text>
           </box>
         </box>
