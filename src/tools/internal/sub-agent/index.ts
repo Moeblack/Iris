@@ -29,6 +29,10 @@ const logger = createLogger('SubAgent');
 export interface SubAgentToolDeps {
   /** 动态获取 router（支持热重载后取到最新实例） */
   getRouter: () => LLMRouter;
+  /** LLM 调用报错时是否自动重试 */
+  retryOnError?: boolean;
+  /** 自动重试最大次数 */
+  maxRetries?: number;
   tools: ToolRegistry;
   subAgentTypes: SubAgentTypeRegistry;
   maxDepth: number;
@@ -127,6 +131,8 @@ export function createSubAgentTool(deps: SubAgentToolDeps, currentDepth: number 
       const loop = new ToolLoop(subTools, subPrompt, {
         maxRounds: typeConfig.maxToolRounds,
         toolsConfig: { permissions: deps.getToolPolicies() },
+        retryOnError: deps.retryOnError,
+        maxRetries: deps.maxRetries,
       });
 
       const callLLM: LLMCaller = async (request, modelName) => {

@@ -271,6 +271,8 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     tools.register(createSubAgentTool({
       getRouter: () => backend.getRouter(),
       getToolPolicies: () => backend.getToolPolicies(),
+      retryOnError: config.system.retryOnError,
+      maxRetries: config.system.maxRetries,
       tools,
       subAgentTypes,
       maxDepth: config.system.maxAgentDepth,

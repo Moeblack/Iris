@@ -221,16 +221,6 @@ export function InputBar({ disabled, isGenerating, queueSize, onSubmit, onPriori
 
   return (
     <box flexDirection="column">
-      {/* 生成中提示栏：队列信息 + 强制发送快捷键 */}
-      {isQueueMode && (
-        <box paddingLeft={1} paddingBottom={0}>
-          {queueSize > 0 ? (
-            <text fg={C.warn}>{`📨 ${queueSize} 条排队中  `}<span fg={C.dim}>/queue 管理  </span></text>
-          ) : null}
-          <text fg={C.dim}>Ctrl+S </text>
-          <text fg={C.textSec}>立即发送</text>
-        </box>
-      )}
 
       {/* 指令列表（向上展开，位于输入框上方） */}
       {filtered.length > 0 && (

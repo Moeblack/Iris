@@ -70,9 +70,9 @@ export function HintBar({ isGenerating, queueSize, copyMode, exitConfirmArmed }:
     const parts: string[] = [];
     parts.push(isGenerating ? 'esc 中断生成' : 'ctrl+j 换行');
     if (isGenerating && hasQueue) {
-      parts.push(`/queue 管理队列(${queueSize})`);
+      parts.push('/queue 管理队列');
     }
-    parts.push(copyMode ? 'f6 返回滚动模式' : 'f6 复制模式');
+    parts.push(isGenerating ? 'ctrl+s 立即发送' : (copyMode ? 'f6 返回滚动模式' : 'f6 复制模式'));
     hintStr = parts.join('  \u00b7  ');
   }
   const hintWidth = getTextWidth(hintStr);
@@ -98,11 +98,11 @@ export function HintBar({ isGenerating, queueSize, copyMode, exitConfirmArmed }:
           {isGenerating && hasQueue ? (
             <>
               {'  \u00b7  '}
-              <span fg={C.warn}>{`/queue 管理队列(${queueSize})`}</span>
+              <span fg={C.warn}>/queue 管理队列</span>
             </>
           ) : null}
           {'  \u00b7  '}
-          {copyMode ? 'f6 返回滚动模式' : 'f6 复制模式'}
+          {isGenerating ? 'ctrl+s 立即发送' : (copyMode ? 'f6 返回滚动模式' : 'f6 复制模式')}
         </text>
       )}
     </box>
