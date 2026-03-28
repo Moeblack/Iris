@@ -31,6 +31,8 @@ RUN cd src/platforms/web/web-ui && npm install
 # ------ Stage 2: Build Vue 3 Web UI (Vite) ------
 FROM deps AS build-ui
 COPY src/platforms/web/web-ui/ src/platforms/web/web-ui/
+# web-ui imports shared modules from parent directory
+COPY src/platforms/web/chat-attachments.ts src/platforms/web/chat-attachments.ts
 RUN cd src/platforms/web/web-ui && npm run build
 
 
