@@ -1,0 +1,52 @@
+# VCS
+.git
+.gitignore
+
+# Build output (rebuilt inside Docker)
+dist/
+node_modules/
+src/platforms/web/web-ui/dist/
+src/platforms/web/web-ui/node_modules/
+
+# Windows portable Node.js
+node/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code / limcode
+.claude/
+.limcode/
+
+# Runtime data (user-specific, not part of image)
+data/configs/
+data/sessions/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Windows deploy scripts (not needed in Docker)
+deploy/windows/
+一键启动.bat
+
+# Lock file for bun (deps stage uses npm; bun-compile inherits from deps)
+bun.lock
+
+# Misc (root-level only, do NOT use *.html — it would exclude web-ui/index.html)
+gemini_*.html
+
+# Directories not needed for Docker build
+tests/
+docs/
+bin/
+deploy/linux/
+vitest.config.ts
+README.md

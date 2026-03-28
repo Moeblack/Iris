@@ -68,7 +68,31 @@ Linux 额外支持 systemd 服务管理（`iris service start/stop/status`）。
 
 支持 Ubuntu、Debian、CentOS、Fedora、Alpine、Arch、Termux (Android)、macOS 以及 Windows x64。
 
-### 方式四：源码开发
+### 方式四：Docker
+
+```bash
+# 下载 compose 文件
+curl -O https://raw.githubusercontent.com/Lianues/Iris/main/deploy/docker/iris-compose.yml
+curl -O https://raw.githubusercontent.com/Lianues/Iris/main/deploy/docker/iris.env.example
+cp iris.env.example .env
+
+# 启动
+docker compose -f iris-compose.yml up -d
+
+# 编辑 LLM API Key（首次启动后）
+docker compose -f iris-compose.yml exec iris vi /data/configs/llm.yaml
+docker compose -f iris-compose.yml restart
+```
+
+如需浏览器自动化（Computer Use），使用 `computer-use` 镜像：
+
+```bash
+docker compose -f iris-compose.yml --profile computer-use up -d iris-computer-use
+```
+
+详见 [docs/deploy.md](docs/deploy.md#docker-部署)。
+
+### 方式五：源码开发
 
 ```bash
 git clone https://github.com/Lianues/Iris.git
@@ -307,7 +331,7 @@ model: gpt-4o-mini
 - [docs/tools.md](docs/tools.md) — 工具注册与调度
 - [docs/core.md](docs/core.md) — 核心 Backend 逻辑
 - [docs/media.md](docs/media.md) — 文档/图片处理
-- [docs/deploy.md](docs/deploy.md) — Linux 部署指南
+- [docs/deploy.md](docs/deploy.md) — 部署指南（Linux VPS / Docker）
 
 ## 开发
 

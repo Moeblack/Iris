@@ -1,0 +1,59 @@
+services:
+  # ---- Default: production image (Node 22 Alpine) ----
+  iris:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      target: production
+    container_name: iris
+    restart: unless-stopped
+    ports:
+      - "${IRIS_PORT:-8192}:8192"
+    volumes:
+      - iris-data:/data
+    environment:
+      NODE_ENV: production
+      IRIS_DATA_DIR: /data
+      IRIS_PLATFORM: ${IRIS_PLATFORM:-web}
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8192"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---- Optional: Computer Use with Playwright/Chromium ----
+  # Start with: docker compose --profile computer-use up -d iris-computer-use
+  iris-computer-use:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      target: computer-use-base
+    container_name: iris-cu
+    restart: unless-stopped
+    profiles:
+      - computer-use
+    ports:
+      - "${IRIS_PORT:-8192}:8192"
+    volumes:
+      - iris-data:/data
+    environment:
+      NODE_ENV: production
+      IRIS_DATA_DIR: /data
+      IRIS_PLATFORM: ${IRIS_PLATFORM:-web}
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8192"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  iris-data:
+    driver: local
