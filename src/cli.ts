@@ -46,6 +46,8 @@ Iris CLI - AI Agent 命令行接口
   iris extension install <path> 从远程仓库的 extensions/<path>/ 安装 extension
   iris ext install-local <name> 仅从本地 extension 目录安装
   iris onboard                  启动交互式配置引导
+  iris platforms                打开平台配置界面
+  iris models                   打开模型配置界面
 
 参数:
   -p, --prompt <text>           提示词文本

@@ -344,7 +344,7 @@ for (const target of targets) {
     console.log("  ✓ iris built")
 
     await buildCompiledBinary({
-      entrypoint: "./onboard/src/index.tsx",
+      entrypoint: "./terminal/src/index.tsx",
       outfile: `dist/bin/${dirName}/bin/iris-onboard`,
       target: compileTarget,
       minify: true,

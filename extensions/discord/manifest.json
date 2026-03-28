@@ -5,7 +5,21 @@
   "platforms": [
     {
       "name": "discord",
-      "entry": "dist/index.mjs"
+      "label": "Discord Bot",
+      "entry": "dist/index.mjs",
+      "description": "Discord 机器人，支持频道消息与私聊。",
+      "panel": {
+        "description": "填写 Discord 机器人的访问凭证。",
+        "fields": [
+          {
+            "key": "token",
+            "type": "password",
+            "label": "Discord Bot Token",
+            "description": "在 Discord Developer Portal 中创建应用并获取 Token。",
+            "required": true
+          }
+        ]
+      }
     }
   ]
 }

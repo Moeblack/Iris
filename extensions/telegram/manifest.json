@@ -5,7 +5,22 @@
   "platforms": [
     {
       "name": "telegram",
-      "entry": "dist/index.mjs"
+      "label": "Telegram Bot",
+      "entry": "dist/index.mjs",
+      "description": "Telegram 机器人，支持私聊与群聊。",
+      "panel": {
+        "description": "填写 Telegram 机器人的访问凭证。",
+        "fields": [
+          {
+            "key": "token",
+            "type": "password",
+            "label": "Telegram Bot Token",
+            "description": "从 @BotFather 获取。",
+            "example": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "required": true
+          }
+        ]
+      }
     }
   ]
 }

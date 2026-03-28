@@ -8,6 +8,8 @@
  *   iris serve                  → 启动平台服务
  *   iris start                  → 启动平台服务（serve 别名）
  *   iris onboard                → 启动交互式配置引导
+ *   iris platforms              → 启动平台配置界面
+ *   iris models                 → 启动模型配置界面
  *   iris extension install <path>      → 从远程仓库的 extensions/<path>/ 安装 extension
  *   iris ext install-local <name>      → 仅从本地 extension 目录安装
  *   iris -p "prompt"            → CLI 模式
@@ -37,7 +39,7 @@ function spawnAndExit(command: string, forwardedArgs: string[]): never {
   process.exit(typeof result.status === 'number' ? result.status : 0);
 }
 
-function runOnboard(): never {
+function resolveTerminalBinary(): string {
   const binaryName = process.platform === 'win32' ? 'iris-onboard.exe' : 'iris-onboard';
   const hiddenBinaryName = process.platform === 'win32' ? '.iris-onboard.exe' : '.iris-onboard';
   const execDir = path.dirname(fs.realpathSync(process.execPath));
@@ -46,17 +48,22 @@ function runOnboard(): never {
     path.join(execDir, hiddenBinaryName),
   ];
 
-  const onboardBinary = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!onboardBinary) {
-    console.error('未找到 iris-onboard 二进制，请确认当前发行包已包含 onboard 工具。');
+  const terminalBinary = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!terminalBinary) {
+    console.error('未找到 iris-onboard 二进制，请确认当前发行包已包含 terminal 工具。');
     process.exit(1);
   }
 
-  spawnAndExit(onboardBinary, args.slice(1));
+  return terminalBinary;
 }
 
-if (args[0] === 'onboard') {
-  runOnboard();
+function runTerminalCommand(commandName: string): never {
+  const terminalBinary = resolveTerminalBinary();
+  spawnAndExit(terminalBinary, [commandName, ...args.slice(1)]);
+}
+
+if (args[0] === 'onboard' || args[0] === 'platforms' || args[0] === 'models') {
+  runTerminalCommand(args[0]);
 }
 
 if (args[0] === 'extension' || args[0] === 'extensions' || args[0] === 'ext') {
@@ -70,10 +77,6 @@ if (args[0] === 'extension' || args[0] === 'extensions' || args[0] === 'ext') {
   }
 }
 
-// ============ Sidecar 模式（内部使用） ============
-// 编译后的二进制通过 --sidecar 参数自举为 sidecar 子进程，
-// 不再依赖外部 node + tsx 加载 .ts 源文件。
-
 const sidecarIndex = args.indexOf('--sidecar');
 if (sidecarIndex >= 0) {
   const sidecarType = args[sidecarIndex + 1];
@@ -86,9 +89,6 @@ if (sidecarIndex >= 0) {
     process.exit(1);
   }
 } else {
-
-  // ============ 正常模式 ============
-
   const CLI_FLAGS = new Set([
     '-p', '--prompt',
     '-s', '--session',

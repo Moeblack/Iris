@@ -5,7 +5,29 @@
   "platforms": [
     {
       "name": "qq",
-      "entry": "dist/index.mjs"
+      "label": "QQ (NapCat)",
+      "entry": "dist/index.mjs",
+      "description": "个人 QQ 账号，通过 NapCat OneBot v11 协议接入。",
+      "panel": {
+        "description": "填写 NapCat 连接参数。",
+        "fields": [
+          {
+            "key": "wsUrl",
+            "label": "NapCat WebSocket 地址",
+            "description": "NapCat OneBot v11 正向 WebSocket 地址。",
+            "example": "ws://127.0.0.1:3001",
+            "defaultValue": "ws://127.0.0.1:3001",
+            "required": true
+          },
+          {
+            "key": "selfId",
+            "label": "机器人 QQ 号",
+            "description": "填写登录 NapCat 的 QQ 号，用于群聊 @ 判断。",
+            "example": "123456789",
+            "required": true
+          }
+        ]
+      }
     }
   ]
 }

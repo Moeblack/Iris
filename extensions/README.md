@@ -72,7 +72,22 @@ extension 开发应遵守下面几条：
   "platforms": [
     {
       "name": "demo-platform",
-      "entry": "platform.mjs"
+      "label": "Demo Platform",
+      "entry": "platform.mjs",
+      "description": "示例平台",
+      "panel": {
+        "description": "终端引导页填写的参数声明",
+        "fields": [
+          {
+            "key": "token",
+            "type": "password",
+            "label": "Access Token",
+            "description": "平台访问凭证",
+            "example": "sk-xxxx",
+            "required": true
+          }
+        ]
+      }
     }
   ]
 }
@@ -83,6 +98,11 @@ extension 开发应遵守下面几条：
 - `plugin`：声明一个 Iris 插件入口。
 - `platforms`：声明一个或多个平台工厂。这里对应原先 channel 的能力。
 - `entry`：顶层简写。仅在 `plugin.entry` 未填写时作为插件入口使用。
+- `platforms[].label`：平台显示名称，用于终端引导等界面展示。
+- `platforms[].panel`：平台配置面板声明。`iris platforms` 与 onboard 中的平台步骤都会复用它生成输入界面，并把结果写入 `platform.yaml` 对应平台配置下。
+- `platforms[].panel.fields[].key`：字段键名，默认也作为写入配置时的键名。
+- `platforms[].panel.fields[].configKey`：可选。若填写，则使用它作为写入配置时的键名。
+- `platforms[].panel.fields[].type`：目前支持 `string`、`password`、`number`。
 
 ## 当前使用方式
 

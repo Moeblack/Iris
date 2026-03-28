@@ -5,6 +5,38 @@ export interface ExtensionPluginContribution {
   configFile?: string;
 }
 
+export type ExtensionPlatformPanelFieldType = 'string' | 'password' | 'number';
+
+export interface ExtensionPlatformPanelField {
+  /** 表单字段唯一键 */
+  key: string;
+  /** 写入 platform.yaml 对应平台配置对象时使用的键名；不填时默认使用 key */
+  configKey?: string;
+  /** 表单字段类型 */
+  type?: ExtensionPlatformPanelFieldType;
+  /** 字段显示名称 */
+  label: string;
+  /** 字段说明 */
+  description?: string;
+  /** 输入框占位文本 */
+  placeholder?: string;
+  /** 示例值 */
+  example?: string;
+  /** 默认值 */
+  defaultValue?: string | number;
+  /** 是否必填 */
+  required?: boolean;
+}
+
+export interface ExtensionPlatformPanelContribution {
+  /** 平台配置面板标题 */
+  title?: string;
+  /** 平台配置面板说明 */
+  description?: string;
+  /** 平台配置面板需要填写的字段列表 */
+  fields: ExtensionPlatformPanelField[];
+}
+
 export interface ExtensionPlatformContribution {
   /** 注册到 platform.type 中的平台名称 */
   name: string;
@@ -12,8 +44,12 @@ export interface ExtensionPlatformContribution {
   entry: string;
   /** 命名导出名；不填时依次尝试 default / factory / platform */
   exportName?: string;
+  /** 平台显示名称（用于终端界面展示） */
+  label?: string;
   /** 平台描述 */
   description?: string;
+  /** 平台配置面板声明 */
+  panel?: ExtensionPlatformPanelContribution;
 }
 
 export interface ExtensionManifest {
@@ -61,7 +97,7 @@ export type ExtensionDistributionMode = 'bundled' | 'source';
 export interface InstalledExtensionResult {
   source: 'remote' | 'local';
   requested: string;
-  name: string;
+ name: string;
   version: string;
   targetDir: string;
   remotePath?: string;

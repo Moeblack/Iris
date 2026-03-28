@@ -5,7 +5,29 @@
   "platforms": [
     {
       "name": "lark",
-      "entry": "dist/index.mjs"
+      "label": "飞书 (Lark)",
+      "entry": "dist/index.mjs",
+      "description": "飞书自建应用机器人，使用 WebSocket 长连接模式。",
+      "panel": {
+        "description": "填写飞书自建应用的凭证信息。",
+        "fields": [
+          {
+            "key": "appId",
+            "label": "App ID",
+            "description": "在飞书开放平台的应用凭证页获取。",
+            "example": "cli_xxxxxxxxxxxx",
+            "required": true
+          },
+          {
+            "key": "appSecret",
+            "type": "password",
+            "label": "App Secret",
+            "description": "应用访问密钥。",
+            "example": "your-app-secret",
+            "required": true
+          }
+        ]
+      }
     }
   ]
 }

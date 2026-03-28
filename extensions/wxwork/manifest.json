@@ -5,7 +5,29 @@
   "platforms": [
     {
       "name": "wxwork",
-      "entry": "dist/index.mjs"
+      "label": "企业微信 (WXWork)",
+      "entry": "dist/index.mjs",
+      "description": "企业微信智能机器人，使用 WebSocket 长连接模式。",
+      "panel": {
+        "description": "填写企业微信智能机器人的接入凭证。",
+        "fields": [
+          {
+            "key": "botId",
+            "label": "Bot ID",
+            "description": "在企业微信管理后台的智能机器人配置中获取。",
+            "example": "aibXXXXXXXXXXXX",
+            "required": true
+          },
+          {
+            "key": "secret",
+            "type": "password",
+            "label": "Secret",
+            "description": "机器人接入密钥。",
+            "example": "your-bot-secret",
+            "required": true
+          }
+        ]
+      }
     }
   ]
 }
