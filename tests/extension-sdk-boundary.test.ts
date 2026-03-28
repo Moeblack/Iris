@@ -60,6 +60,20 @@ function normalizePackageName(specifier: string): string {
 }
 
 describe('extension sdk boundary', () => {
+  it('宿主根 package.json 不应再通过 workspaces 管理 extensions 依赖', () => {
+    const rootPackageJson = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8'),
+    ) as { workspaces?: string[] | { packages?: string[] } };
+
+    const workspaceEntries = Array.isArray(rootPackageJson.workspaces)
+      ? rootPackageJson.workspaces
+      : Array.isArray(rootPackageJson.workspaces?.packages)
+        ? rootPackageJson.workspaces.packages
+        : [];
+
+    expect(workspaceEntries).not.toContain('extensions/*');
+  });
+
   it('宿主根 package.json 不应声明仅供 extension 使用的第三方依赖', () => {
     const rootPackageJson = JSON.parse(
       fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8'),
@@ -97,6 +111,26 @@ describe('extension sdk boundary', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  it('每个 extension 都应维护自己的锁文件', () => {
+    const missingLockfiles: string[] = [];
+
+    for (const extensionDir of listExtensionDirs()) {
+      const hasLockfile = [
+        'package-lock.json',
+        'pnpm-lock.yaml',
+        'bun.lock',
+        'bun.lockb',
+        'yarn.lock',
+      ].some((fileName) => fs.existsSync(path.join(extensionDir, fileName)));
+
+      if (!hasLockfile) {
+        missingLockfiles.push(path.basename(extensionDir));
+      }
+    }
+
+    expect(missingLockfiles).toEqual([]);
   });
 
   it('每个 extension 都应在自己的 package.json 中声明所使用的第三方依赖', () => {

@@ -104,14 +104,18 @@ cd Iris
 
 ```bash
 npm install
-npm run setup          # 安装全部依赖（含 Web UI）
+npm run setup          # 安装宿主依赖 + 各 extension 自己目录下的依赖 + Web UI
 npm run dev            # 启动（按当前平台配置自动选择运行时）
 ```
+
+说明：根目录 `npm install` 只安装宿主依赖；各 extension 的第三方依赖与锁文件现在由各自目录维护。需要时可单独执行 `npm run setup:extensions`。
+正式分发给用户的 extension 应当已经包含可运行产物（例如 `dist/index.mjs`），用户安装时不再额外执行 `npm install`。
 
 **全功能开发（含 Console TUI，需要 Bun）：**
 
 ```bash
 bun install
+npm run setup:extensions
 bun run dev            # 启动（直接使用 Bun 运行时）
 ```
 

@@ -25,6 +25,8 @@ Iris Extension 命令
   - install 支持这些写法：aaa、group/aaa、extensions/aaa
   - 安装目标目录：~/.iris/extensions/<manifest.name>/
   - install 会优先从远程仓库压缩包提取 extensions/<path>/；仅当远程不存在该目录时，才尝试本地安装
+  - extension 必须自带可运行入口（例如 dist/index.mjs）才允许安装
+  - 若 extension 只包含源码、缺少可运行入口，则会直接报错：这不是可直接安装的发行包
   - install-local 只会从当前仓库根目录 ./extensions/ 查找并安装
   - 可通过环境变量 IRIS_EXTENSION_REMOTE_ARCHIVE_URL 覆盖远程仓库压缩包地址
 `.trim();
@@ -85,6 +87,9 @@ function printInstalledSummary(result: Awaited<ReturnType<typeof installExtensio
   }
   if (result.fallbackReason === 'remote_path_not_found' && result.fallbackDetail) {
     console.log(`- 回退原因: 远程目录不存在：${result.fallbackDetail}`);
+  }
+  if (result.distributionMode) {
+    console.log(`- 分发形态: ${result.distributionMode}`);
   }
 }
 

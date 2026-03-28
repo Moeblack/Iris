@@ -75,6 +75,61 @@ describe('extension installer', () => {
     expect(fs.existsSync(path.join(installedExtensionsDir, 'demo-extension', 'index.mjs'))).toBe(true);
   });
 
+  it('install-local 不复制源目录中的 node_modules', async () => {
+    const localExtensionsDir = createTempDir('iris-ext-local-');
+    const installedExtensionsDir = createTempDir('iris-ext-installed-');
+    const sourceDir = path.join(localExtensionsDir, 'copy-filter-demo');
+
+    writeJson(path.join(sourceDir, 'manifest.json'), {
+      name: 'copy-filter-demo',
+      version: '0.1.0',
+      platforms: [
+        { name: 'copy-filter-demo', entry: 'dist/index.mjs' },
+      ],
+    });
+    writeJson(path.join(sourceDir, 'package.json'), {
+      name: '@iris-extension/copy-filter-demo',
+      version: '0.1.0',
+    });
+    writeText(path.join(sourceDir, 'dist', 'index.mjs'), 'export default {};\n');
+    writeText(path.join(sourceDir, 'node_modules', 'left-pad', 'index.js'), 'module.exports = () => {};\n');
+
+    const result = await installLocalExtension('copy-filter-demo', {
+      localExtensionsDir,
+      installedExtensionsDir,
+    });
+
+    expect(result.source).toBe('local');
+    expect(fs.existsSync(path.join(result.targetDir, 'node_modules'))).toBe(false);
+  });
+
+  it('install-local 遇到 source-first extension 时直接报错，要求预构建发行包', async () => {
+    const localExtensionsDir = createTempDir('iris-ext-local-');
+    const installedExtensionsDir = createTempDir('iris-ext-installed-');
+    const sourceDir = path.join(localExtensionsDir, 'source-first-demo');
+
+    writeJson(path.join(sourceDir, 'manifest.json'), {
+      name: 'source-first-demo',
+      version: '0.1.0',
+      platforms: [
+        { name: 'source-first-demo', entry: 'dist/index.mjs' },
+      ],
+    });
+    writeJson(path.join(sourceDir, 'package.json'), {
+      name: '@iris-extension/source-first-demo',
+      version: '0.1.0',
+      scripts: { build: 'echo build' },
+      dependencies: { '@iris/extension-sdk': 'file:../../packages/extension-sdk' },
+    });
+    writeText(path.join(sourceDir, 'src', 'index.ts'), 'export default {};\n');
+
+    await expect(installLocalExtension('source-first-demo', {
+      localExtensionsDir,
+      installedExtensionsDir,
+    })).rejects.toThrow('这不是可直接安装的发行包');
+    expect(fs.existsSync(path.join(installedExtensionsDir, 'source-first-demo'))).toBe(false);
+  });
+
   it('install 支持按远程 extensions 目录安装', async () => {
     const installedExtensionsDir = createTempDir('iris-ext-installed-');
     const remoteArchiveUrl = 'https://example.com/Iris-main.zip';
@@ -82,8 +137,11 @@ describe('extension installer', () => {
       'Iris-main/extensions/community/demo-extension/manifest.json': JSON.stringify({
         name: 'remote-demo-extension',
         version: '1.2.3',
+        platforms: [
+          { name: 'remote-demo-extension', entry: 'dist/index.mjs' },
+        ],
       }, null, 2),
-      'Iris-main/extensions/community/demo-extension/plugin.mjs': 'export default {};\n',
+      'Iris-main/extensions/community/demo-extension/dist/index.mjs': 'export default {};\n',
       'Iris-main/extensions/community/demo-extension/assets/readme.md': '# demo\n',
     });
 
@@ -101,7 +159,7 @@ describe('extension installer', () => {
     expect(result.remotePath).toBe('extensions/community/demo-extension');
     expect(result.name).toBe('remote-demo-extension');
     expect(result.targetDir).toBe(path.join(installedExtensionsDir, 'remote-demo-extension'));
-    expect(fs.existsSync(path.join(installedExtensionsDir, 'remote-demo-extension', 'plugin.mjs'))).toBe(true);
+    expect(fs.existsSync(path.join(installedExtensionsDir, 'remote-demo-extension', 'dist', 'index.mjs'))).toBe(true);
     expect(fs.existsSync(path.join(installedExtensionsDir, 'remote-demo-extension', 'assets', 'readme.md'))).toBe(true);
   });
 

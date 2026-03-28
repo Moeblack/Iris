@@ -3,8 +3,10 @@ import * as path from 'path';
 import JSZip from 'jszip';
 import { createLogger } from '../logger';
 import { extensionsDir as defaultInstalledExtensionsDir, workspaceExtensionsDir as defaultLocalExtensionsDir } from '../paths';
+import { assertInstallableExtensionPackage, copyExtensionDirectory } from './dependencies';
 import type {
   ExtensionManifest,
+  ExtensionDistributionMode,
   ExtensionInstallFallbackReason,
   InstalledExtensionResult,
 } from './types';
@@ -142,6 +144,7 @@ function finalizeInstall(
   requested: string,
   source: 'remote' | 'local',
   extras: {
+    distributionMode?: ExtensionDistributionMode;
     remotePath?: string;
     sourceDir?: string;
     fallbackReason?: ExtensionInstallFallbackReason;
@@ -152,12 +155,14 @@ function finalizeInstall(
   const targetDir = path.join(installedRootDir, manifest.name);
   fs.rmSync(targetDir, { recursive: true, force: true });
   fs.renameSync(tempDir, targetDir);
+
   return {
     source,
     requested,
     name: manifest.name,
     version: manifest.version,
     targetDir,
+    distributionMode: extras.distributionMode,
     remotePath: extras.remotePath,
     sourceDir: extras.sourceDir,
     fallbackReason: extras.fallbackReason,
@@ -317,7 +322,10 @@ async function installRemoteExtension(
       throw new RemoteInstallError('remote_path_not_found', `远程 extension 目录缺少 manifest.json: ${remotePath}`);
     }
 
+    const validated = assertInstallableExtensionPackage(tempDir, manifest);
+
     return finalizeInstall(tempDir, manifest, requested, 'remote', {
+      distributionMode: validated.distributionMode,
       remotePath,
     }, installedRootDir);
   } catch (err) {
@@ -341,13 +349,16 @@ export async function installLocalExtension(
 
   const tempDir = createTempInstallDir(installedRootDir);
   try {
-    fs.cpSync(source.rootDir, tempDir, { recursive: true });
+    copyExtensionDirectory(source.rootDir, tempDir);
     const manifest = readManifestFromDir(tempDir);
     if (!manifest) {
       throw new Error(`本地 extension 缺少有效 manifest.json: ${source.rootDir}`);
     }
 
+    const validated = assertInstallableExtensionPackage(tempDir, manifest);
+
     return finalizeInstall(tempDir, manifest, requested, 'local', {
+      distributionMode: validated.distributionMode,
       sourceDir: source.rootDir,
     }, installedRootDir);
   } catch (err) {

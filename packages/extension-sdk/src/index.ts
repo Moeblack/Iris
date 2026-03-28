@@ -5,6 +5,7 @@ export type {
   ExtensionPluginContribution,
   ExtensionSource,
   InstalledExtensionResult,
+  ExtensionDistributionMode,
   ResolvedLocalPlugin,
   ExtensionInstallFallbackReason,
 } from './manifest';

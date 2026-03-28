@@ -56,6 +56,8 @@ export interface ResolvedLocalPlugin {
 
 export type ExtensionInstallFallbackReason = 'remote_path_not_found';
 
+export type ExtensionDistributionMode = 'bundled' | 'source';
+
 export interface InstalledExtensionResult {
   source: 'remote' | 'local';
   requested: string;
@@ -66,4 +68,5 @@ export interface InstalledExtensionResult {
   sourceDir?: string;
   fallbackReason?: ExtensionInstallFallbackReason;
   fallbackDetail?: string;
+  distributionMode?: ExtensionDistributionMode;
 }

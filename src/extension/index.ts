@@ -6,6 +6,7 @@ export type {
   ExtensionSource,
   ResolvedLocalPlugin,
   ExtensionInstallFallbackReason,
+  ExtensionDistributionMode,
   InstalledExtensionResult,
 } from './types';
 

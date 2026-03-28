@@ -4,13 +4,9 @@
   "description": "模块化、可解耦的 AI 聊天框架，支持多平台、多 LLM、工具调用",
   "license": "GPL-3.0-only",
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "extensions/*"
-  ],
   "scripts": {
     "build": "npm run typecheck:ui && npm run build:ui && npx tsc -p tsconfig.build.json",
-    "build:compile": "npm install --no-save react-devtools-core && bun run script/build.ts",
+    "build:compile": "npm install --no-save react-devtools-core && tsx script/install-extension-deps.ts --embedded-only --frozen-lockfile && bun run script/build.ts",
     "build:ui": "cd src/platforms/web/web-ui && npm run build",
     "typecheck:ui": "cd src/platforms/web/web-ui && npm run typecheck",
     "lint:ui": "cd src/platforms/web/web-ui && npm run lint",
@@ -22,8 +18,9 @@
     "cli:bun": "bun src/cli.ts",
     "start:bun": "bun script/run.ts",
     "dev:bun": "bun script/run.ts",
-    "setup": "npm install --legacy-peer-deps && cd src/platforms/web/web-ui && npm install",
-    "test": "vitest run"
+    "setup:extensions": "tsx script/install-extension-deps.ts",
+    "setup": "npm install --legacy-peer-deps && npm run setup:extensions -- --frozen-lockfile && cd src/platforms/web/web-ui && npm install",
+    "test": "npm run setup:extensions -- --frozen-lockfile && vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

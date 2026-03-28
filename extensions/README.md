@@ -11,8 +11,9 @@
 5. 不再需要维护 `extensions/registry.json`。
 6. 发行包内嵌哪些 extension，由 `extensions/embedded.json` 控制。
 7. extension 与宿主之间的公共边界，统一通过 `packages/extension-sdk/` 暴露。
-8. extension 自己使用的第三方依赖，必须声明在 extension 自己的 `package.json` 中。
+8. extension 自己使用的第三方依赖，必须声明在 extension 自己的 `package.json` 中，并安装到 extension 自己目录下的 `node_modules/`。
 9. 外部 extension 建议放在独立仓库维护，并保留自己的锁文件；不要再假设会复用宿主仓库根目录的依赖树。
+10. 仓库根目录不再通过 `workspaces` 统一 hoist `extensions/*` 的依赖。
 
 ## 仓库内示例
 
@@ -38,11 +39,17 @@ extension 开发应遵守下面几条：
 - 公共类型、`PlatformAdapter`、`splitText`、logger、pairing 等能力，统一从 `@iris/extension-sdk` 获取。
 - 不要再直接 import 宿主内部源码，例如：`../../../src/core/backend`、`../../../src/types`、`../../../src/platforms/pairing`。
 - extension 使用到的第三方库，必须写到 extension 自己的 `package.json`。
+- extension 的锁文件也应放在 extension 自己目录，例如 `extensions/telegram/package-lock.json`。
 - 如果 extension 单独放在外部仓库，应在那个仓库里维护 `package-lock.json` / `bun.lock` / `pnpm-lock.yaml`。
+- 正式分发给用户安装的 extension，必须已经包含可运行入口，例如 `dist/index.mjs`。
+- 只包含 `src/` 源码、缺少可运行入口的包，不属于可直接安装的发行包。
 
 当前仓库内置的 SDK 源码位于：
 
 - `packages/extension-sdk/`
+
+当前仓库可通过 `npm run setup:extensions` 安装全部 extension 的独立依赖。
+这个脚本只服务开发和构建，不属于用户安装 extension 时的运行步骤。
 
 仓库测试会检查两件事：
 
