@@ -94,8 +94,8 @@ RUN chmod +x bin/iris bin/iris-onboard
 # Entrypoint script
 COPY deploy/docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
-
-# Ensure data volume mount point exists and is owned by node
+# Extension plugins (lark, telegram, weixin, etc.)
+COPY extensions/ extensions/
 RUN mkdir -p /data && chown node:node /data
 
 ENV NODE_ENV=production \
@@ -133,6 +133,7 @@ COPY --from=bun-compile /app/dist/bin/iris-linux-x64/bin/iris-onboard bin/iris-o
 RUN chmod +x bin/iris bin/iris-onboard
 COPY deploy/docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+COPY extensions/ extensions/
 
 RUN mkdir -p /data && chown iris:iris /data
 
