@@ -1,7 +1,7 @@
 # 平台配置
 
 # 类型: console | discord | telegram | web | weixin | wxwork | lark | qq
-# 注意：lark 由随仓库提供的 extensions/lark 注册；手动精简目录时不要删除该目录。
+# 注意：lark 由随仓库提供的 extensions/lark 注册；wxwork / weixin 为可选 extension，使用前需先安装。
 # 支持单平台或多平台同时启动：
 #   type: console            # 单平台
 #   type: [console, web]     # 多平台同时启动
@@ -38,6 +38,7 @@ web:
   # managementToken: your-management-token-here
 
 wxwork:
+  # 该平台由可选 extension extensions/wxwork/ 提供；发行包默认不内嵌，使用前先执行 iris ext install wxwork
   # 企业微信智能机器人 Bot ID 和 Secret
   # 在企业微信管理后台 → 应用管理 → 智能机器人 中创建并获取
   # 文档: https://developer.work.weixin.qq.com/document/path/101463
@@ -61,9 +62,10 @@ lark:
   # encryptKey: your-encrypt-key
 
 weixin:
+  # 该平台由可选 extension extensions/weixin/ 提供；发行包默认不内嵌，使用前先执行 iris ext install weixin
   # 普通微信（WeChat），基于腾讯官方 ilink 协议
   # 首次启动时会自动弹出二维码，用微信扫码即可完成登录
-  # 登录成功后 Token 自动缓存到 data/configs/weixin-auth.json，无需手动配置
+  # 登录成功后 Token 自动缓存到 IRIS_DATA_DIR/configs/weixin-auth.json，无需手动配置
   #
   # 可选：手动指定 Bot Token（如从其他实例迁移）
   # botToken: your-bot-token

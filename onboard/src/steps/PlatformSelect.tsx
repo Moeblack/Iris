@@ -25,17 +25,17 @@ const PLATFORMS = [
   {
     value: "lark",
     label: "飞书 (Lark)",
-    desc: "飞书自建应用机器人，WebSocket 长连接模式",
+    desc: "飞书自建应用机器人，WebSocket 长连接模式（随包附带的 extension）",
   },
   {
     value: "wxwork",
     label: "企业微信 (WXWork)",
-    desc: "企业微信智能机器人，WebSocket 长连接模式",
+    desc: "企业微信智能机器人，WebSocket 长连接模式（可选 extension，需先安装）",
   },
   {
     value: "weixin",
     label: "微信 (WeChat)",
-    desc: "普通微信，腾讯官方 ilink 协议，启动时将自动扫码登录",
+    desc: "普通微信，腾讯官方 ilink 协议（可选 extension，需先安装）",
   },
   {
     value: "qq",

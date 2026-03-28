@@ -1,0 +1,11 @@
+{
+  "name": "wxwork",
+  "version": "0.1.0",
+  "description": "WXWork platform extension for Iris",
+  "platforms": [
+    {
+      "name": "wxwork",
+      "entry": "dist/index.mjs"
+    }
+  ]
+}

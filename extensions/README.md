@@ -13,15 +13,17 @@
 
 ## 仓库内示例
 
-- `extensions/lark/`：飞书平台 extension。
-- `manifest.json` 负责声明 `lark` 平台贡献。
+- `extensions/lark/`：飞书平台 extension，当前随发行包内嵌。
+- `extensions/wxwork/`：企业微信平台 extension，可选安装。
+- `extensions/weixin/`：微信平台 extension，可选安装。
+- 各 extension 的 `manifest.json` 负责声明自己的平台贡献。
 - 运行时入口为 `dist/index.mjs`。
 - `src/` 只是维护源码，真正加载的是打包后的入口。
 - `embedded.json`：声明哪些 extension 需要在发行包构建时预打包并复制进产物。
 
 ## embedded.json
 
-`extensions/embedded.json` 是发行包内嵌 extension 的白名单。只有这个文件里列出的 extension，才会在 `script/build.ts` 中被预先打包，并复制进最终产物的 `extensions/` 目录。
+`extensions/embedded.json` 是发行包内嵌 extension 的白名单。只有这个文件里列出的 extension，才会在 `script/build.ts` 中被预先打包，并复制进最终产物的 `extensions/` 目录。当前内嵌的是 `lark`；`wxwork` 和 `weixin` 不在白名单内，属于可选 extension。
 
 ## manifest.json 结构
 

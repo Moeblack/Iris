@@ -1,5 +1,5 @@
 node_modules/
-dist/
+/dist/
 src/platforms/web/web-ui/dist/
 src/platforms/web/web-ui/node_modules/
 *.log

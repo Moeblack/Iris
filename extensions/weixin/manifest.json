@@ -1,0 +1,11 @@
+{
+  "name": "weixin",
+  "version": "0.1.0",
+  "description": "Weixin platform extension for Iris",
+  "platforms": [
+    {
+      "name": "weixin",
+      "entry": "dist/index.mjs"
+    }
+  ]
+}

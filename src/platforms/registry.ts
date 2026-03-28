@@ -102,15 +102,6 @@ export function createDefaultPlatformRegistry(): PlatformRegistry {
     return webPlatform;
   });
 
-  registry.register('wxwork', async ({ backend, config }) => {
-    const { WXWorkPlatform } = await import('./wxwork');
-    return new WXWorkPlatform(backend, {
-      botId: config.platform.wxwork.botId,
-      secret: config.platform.wxwork.secret,
-      showToolStatus: config.platform.wxwork.showToolStatus,
-    });
-  });
-
   registry.register('qq', async ({ backend, config }) => {
     const { QQPlatform } = await import('./qq');
     return new QQPlatform(backend, {
@@ -119,15 +110,6 @@ export function createDefaultPlatformRegistry(): PlatformRegistry {
       selfId: config.platform.qq.selfId,
       groupMode: config.platform.qq.groupMode,
       showToolStatus: config.platform.qq.showToolStatus,
-    });
-  });
-
-  registry.register('weixin', async ({ backend, config }) => {
-    const { WeixinPlatform } = await import('./weixin');
-    return new WeixinPlatform(backend, {
-      botToken: config.platform.weixin.botToken,
-      baseUrl: config.platform.weixin.baseUrl,
-      showToolStatus: config.platform.weixin.showToolStatus,
     });
   });
 

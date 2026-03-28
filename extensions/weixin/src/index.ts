@@ -22,9 +22,40 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { PlatformAdapter, splitText } from '../base';
-import { Backend, ImageInput } from '../../core/backend';
-import { createLogger } from '../../logger';
+import { createLogger } from './logger';
+
+type ImageInput = {
+  mimeType: string;
+  data: string;
+};
+
+interface WeixinPlatformFactoryContextLike {
+  backend: any;
+  config: {
+    platform?: {
+      weixin?: Partial<WeixinConfig>;
+    };
+  };
+  configDir?: string;
+}
+
+function splitText(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitAt = remaining.lastIndexOf('\n', maxLen);
+    if (splitAt <= 0) splitAt = maxLen;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n/, '');
+  }
+  return chunks;
+}
 
 const logger = createLogger('Weixin');
 
@@ -88,6 +119,7 @@ const TypingStatus = {
 export interface WeixinConfig {
   baseUrl?: string;
   botToken?: string;
+  configDir?: string;
   /** 是否在回复中展示工具执行状态 (默认 true) */
   showToolStatus?: boolean;
 }
@@ -157,10 +189,11 @@ interface ChatState {
 
 // ============ 平台适配器 ============
 
-export class WeixinPlatform extends PlatformAdapter {
-  private backend: Backend;
+export class WeixinPlatform {
+  private backend: any;
   private config: WeixinConfig;
   private baseUrl: string;
+  private configDir: string;
 
   private polling = false;
   private getUpdatesBuf = '';
@@ -178,11 +211,11 @@ export class WeixinPlatform extends PlatformAdapter {
    */
   private activeSessions = new Map<string, string>();
 
-  constructor(backend: Backend, config: WeixinConfig) {
-    super();
+  constructor(backend: any, config: WeixinConfig) {
     this.backend = backend;
     this.config = config;
     this.baseUrl = (config.baseUrl || 'https://ilinkai.weixin.qq.com').replace(/\/$/, '');
+    this.configDir = path.resolve(config.configDir || path.join(process.cwd(), 'data', 'configs'));
 
     if (!this.config.botToken) {
       this.loadTokenFromCache();
@@ -190,7 +223,7 @@ export class WeixinPlatform extends PlatformAdapter {
   }
 
   private loadTokenFromCache() {
-    const cachePath = path.join(process.cwd(), 'data', 'configs', 'weixin-auth.json');
+    const cachePath = path.join(this.configDir, 'weixin-auth.json');
     if (fs.existsSync(cachePath)) {
       try {
         const data = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
@@ -206,7 +239,7 @@ export class WeixinPlatform extends PlatformAdapter {
   }
 
   private saveTokenToCache(botToken: string, baseUrl: string) {
-    const dir = path.join(process.cwd(), 'data', 'configs');
+    const dir = this.configDir;
     try {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -1107,4 +1140,22 @@ function pcmBytesToWav(pcm: Uint8Array, sampleRate: number): Buffer {
 
   return buf;
 }
+
+function resolveWeixinConfigFromContext(context: WeixinPlatformFactoryContextLike): WeixinConfig {
+  const weixin = context.config.platform?.weixin ?? {};
+  return {
+    botToken: weixin.botToken,
+    baseUrl: weixin.baseUrl,
+    showToolStatus: weixin.showToolStatus,
+    configDir: context.configDir,
+  };
+}
+
+export function createWeixinPlatform(context: WeixinPlatformFactoryContextLike): WeixinPlatform {
+  return new WeixinPlatform(context.backend, resolveWeixinConfigFromContext(context));
+}
+
+const platform = createWeixinPlatform;
+
+export default platform;
 

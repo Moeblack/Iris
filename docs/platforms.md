@@ -26,14 +26,14 @@ src/platforms/
 ├── (cli.ts)             # CLI headless 模式（非平台适配器，直接调用 Backend）
 ├── base.ts              # PlatformAdapter 抽象基类
 ├── console/             # 控制台 TUI（OpenTUI / React）
-├── weixin/              # 普通微信（ilink 长轮询）
-├── wxwork/              # 企业微信智能机器人
 ├── qq/                  # QQ 个人账号（NapCat / OneBot v11）
 ├── discord/             # Discord Bot
 ├── telegram/            # Telegram Bot
 └── web/                 # Web GUI（HTTP + SSE + Vue）
 extensions/
-└── lark/                # 飞书平台 extension（manifest + dist/index.mjs）
+├── lark/                # 飞书平台 extension（内嵌）
+├── wxwork/              # 企业微信平台 extension（可选安装）
+└── weixin/              # 微信平台 extension（可选安装）
 ```
 
 ---
@@ -103,7 +103,9 @@ documents: Array<{ fileName: string; mimeType: string; data: string }>
 
 ### Weixin（微信）
 
-基于腾讯微信团队官方 ilink 协议的普通微信适配器。使用 HTTP 长轮询模式，首次启动自动扫码登录。
+Weixin 不再从 `src/platforms/registry.ts` 内置注册，而是由 `extensions/weixin/manifest.json` 注册。该平台属于可选 extension，发行包默认不内嵌，使用前请先执行 `iris ext install weixin`。
+
+实现基于腾讯微信团队官方 ilink 协议。使用 HTTP 长轮询模式，首次启动自动扫码登录。
 
 | 项目 | 说明 |
 |------|------|
@@ -117,7 +119,7 @@ documents: Array<{ fileName: string; mimeType: string; data: string }>
 | Markdown | 不支持，自动转换为纯文本 |
 | 输入状态 | 支持，通过 `sendTyping` + `typing_ticket` 显示"正在输入" |
 | 图片输入 | 支持（CDN 加密传输，AES-128-ECB） |
-| 登录方式 | 扫码登录，Token 自动缓存到 `data/configs/weixin-auth.json` |
+| 登录方式 | 扫码登录，Token 自动缓存到 `IRIS_DATA_DIR/configs/weixin-auth.json` |
 
 #### 微信 Slash 指令
 
@@ -131,9 +133,9 @@ documents: Array<{ fileName: string; mimeType: string; data: string }>
 
 #### 配置
 
-在 `data/configs/platform.yaml` 中设置 `type: weixin`（或加入多平台数组）。
+先安装 extension：`iris ext install weixin`。然后在 `data/configs/platform.yaml` 中设置 `type: weixin`（或加入多平台数组）。
 
-首次启动时无需手动配置凭证，Iris 会自动弹出二维码链接，用微信扫码即可完成登录。登录成功后 Token 自动缓存，后续启动无需再次扫码。
+首次启动时无需手动配置凭证，Iris 会自动弹出二维码链接，用微信扫码即可完成登录。登录成功后 Token 自动缓存到 `IRIS_DATA_DIR/configs/weixin-auth.json`，后续启动无需再次扫码。
 
 ```yaml
 type: weixin
@@ -158,7 +160,9 @@ weixin:
 
 ### WXWork（企业微信）
 
-基于腾讯官方 `@wecom/aibot-node-sdk` 的企业微信智能机器人适配器。
+WXWork 不再从 `src/platforms/registry.ts` 内置注册，而是由 `extensions/wxwork/manifest.json` 注册。该平台属于可选 extension，发行包默认不内嵌，使用前请先执行 `iris ext install wxwork`。
+
+实现基于腾讯官方 `@wecom/aibot-node-sdk` 的企业微信智能机器人适配器。
 
 | 项目 | 说明 |
 |------|------|
@@ -181,7 +185,7 @@ weixin:
 
 #### 配置
 
-在 `data/configs/platform.yaml` 中设置 `type: wxwork`（或加入多平台数组），并填写 `wxwork.botId` 和 `wxwork.secret`。
+先安装 extension：`iris ext install wxwork`。然后在 `data/configs/platform.yaml` 中设置 `type: wxwork`（或加入多平台数组），并填写 `wxwork.botId` 和 `wxwork.secret`。
 
 在企业微信管理后台 → 应用管理 → 智能机器人 中创建并获取 Bot ID 和 Secret。
 
