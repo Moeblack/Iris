@@ -24,6 +24,9 @@ import { MessagePart } from './components/MessageItem';
 import { ConsoleSettingsController, ConsoleSettingsSaveResult, ConsoleSettingsSnapshot } from './settings';
 import type { LLMModelInfo } from '../../llm/router';
 import type { BootstrapExtensionRegistry } from '../../bootstrap/extensions';
+import { configureBundledOpenTuiTreeSitter } from './opentui-runtime';
+
+configureBundledOpenTuiTreeSitter();
 
 function createToolInvocationFromFunctionCall(
   part: any,

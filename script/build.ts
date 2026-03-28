@@ -32,6 +32,8 @@ process.chdir(rootDir)
 const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"))
 const version: string = pkg.version
 const webUiDistDir = path.join(rootDir, "src", "platforms", "web", "web-ui", "dist")
+const opentuiCoreDir = path.join(rootDir, "node_modules", "@opentui", "core")
+const opentuiRuntimeStagingDir = path.join(rootDir, "dist", ".opentui-runtime")
 
 if (!fs.existsSync(webUiDistDir)) {
   console.error("未找到 Web UI 构建产物，请先运行 npm run build:ui")
@@ -85,12 +87,63 @@ if (fs.existsSync(distBinDir)) {
 const opentuiVersion = pkg.optionalDependencies?.["@opentui/core"] ?? "latest"
 await $`bun install --os="*" --cpu="*" @opentui/core@${opentuiVersion}`
 
+await prepareOpenTuiRuntime(opentuiRuntimeStagingDir)
+console.log("✓ OpenTUI tree-sitter runtime prepared")
+
 function getPlatformName(osName: string): string {
   return osName === "win32" ? "windows" : osName
 }
 
 function formatBuildLogs(result: Awaited<ReturnType<typeof Bun.build>>): string {
   return result.logs.map((entry) => entry.message).filter(Boolean).join("\n")
+}
+
+function patchBundledWorkerWasmPath(workerPath: string): void {
+  const original = fs.readFileSync(workerPath, "utf8")
+  const patched = original.replace(
+    /module2\.exports = "\.\/([^"]+\.wasm)";/,
+    'module2.exports = new URL("./$1", import.meta.url).href;',
+  )
+
+  if (patched === original) {
+    throw new Error(`无法修补 OpenTUI worker 中的 wasm 路径: ${workerPath}`)
+  }
+
+  fs.writeFileSync(workerPath, patched)
+}
+
+async function prepareOpenTuiRuntime(stagingDir: string): Promise<void> {
+  const workerEntry = path.join(opentuiCoreDir, "parser.worker.js")
+  const assetsDir = path.join(opentuiCoreDir, "assets")
+
+  if (!fs.existsSync(workerEntry)) {
+    throw new Error(`未找到 OpenTUI parser.worker.js: ${workerEntry}`)
+  }
+  if (!fs.existsSync(assetsDir)) {
+    throw new Error(`未找到 OpenTUI tree-sitter 资源目录: ${assetsDir}`)
+  }
+
+  fs.rmSync(stagingDir, { recursive: true, force: true })
+  fs.mkdirSync(stagingDir, { recursive: true })
+
+  const result = await Bun.build({
+    entrypoints: [workerEntry],
+    outdir: stagingDir,
+    target: "bun",
+  })
+
+  if (!result.success) {
+    const logs = formatBuildLogs(result)
+    throw new Error(logs || "OpenTUI tree-sitter worker 构建失败")
+  }
+
+  const workerOutputPath = path.join(stagingDir, "parser.worker.js")
+  if (!fs.existsSync(workerOutputPath)) {
+    throw new Error(`OpenTUI worker 构建后未生成 parser.worker.js: ${workerOutputPath}`)
+  }
+
+  patchBundledWorkerWasmPath(workerOutputPath)
+  fs.cpSync(assetsDir, path.join(stagingDir, "assets"), { recursive: true })
 }
 
 async function buildCompiledBinary(options: {
@@ -158,6 +211,7 @@ for (const target of targets) {
 
     copyDirectoryIfExists(path.join(rootDir, "data"), path.join(outDir, "data"), "data/")
     copyDirectoryIfExists(webUiDistDir, path.join(outDir, "web-ui", "dist"), "web-ui/dist")
+    copyDirectoryIfExists(opentuiRuntimeStagingDir, path.join(outDir, "bin", "opentui"), "bin/opentui")
 
     const licensePath = path.join(rootDir, "LICENSE")
     if (fs.existsSync(licensePath)) {
