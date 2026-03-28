@@ -31,6 +31,8 @@ RUN cd src/platforms/web/web-ui && npm install
 # ------ Stage 2: Build Vue 3 Web UI (Vite) ------
 FROM deps AS build-ui
 COPY src/platforms/web/web-ui/ src/platforms/web/web-ui/
+# web-ui imports shared modules from parent directory
+COPY src/platforms/web/chat-attachments.ts src/platforms/web/chat-attachments.ts
 RUN cd src/platforms/web/web-ui && npm run build
 
 
@@ -72,9 +74,7 @@ FROM node:22-slim AS production
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tini && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    groupadd -g 1000 iris && \
-    useradd -u 1000 -g iris -m -s /bin/sh iris
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -94,9 +94,9 @@ RUN chmod +x bin/iris bin/iris-onboard
 # Entrypoint script
 COPY deploy/docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
-
-# Ensure data volume mount point exists and is owned by iris
-RUN mkdir -p /data && chown iris:iris /data
+# Extension plugins (lark, telegram, weixin, etc.)
+COPY extensions/ extensions/
+RUN mkdir -p /data && chown node:node /data
 
 ENV NODE_ENV=production \
     IRIS_DATA_DIR=/data \
@@ -104,7 +104,7 @@ ENV NODE_ENV=production \
 
 EXPOSE 8192
 VOLUME /data
-USER iris
+USER node
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/app/entrypoint.sh"]
@@ -118,8 +118,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends tini && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -g 1000 iris 2>/dev/null || true && \
-    useradd -u 1000 -g iris -m -s /bin/bash iris 2>/dev/null || true
+RUN useradd -u 1001 -m -s /bin/bash iris 2>/dev/null || true
 
 WORKDIR /app
 
@@ -133,8 +132,9 @@ COPY --from=bun-compile /app/dist/bin/iris-linux-x64/bin/iris-onboard bin/iris-o
 RUN chmod +x bin/iris bin/iris-onboard
 COPY deploy/docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+COPY extensions/ extensions/
 
-RUN mkdir -p /data && chown iris:iris /data
+RUN mkdir -p /data && chown 1001:1001 /data
 
 ENV NODE_ENV=production \
     IRIS_DATA_DIR=/data \
@@ -143,7 +143,7 @@ ENV NODE_ENV=production \
 
 EXPOSE 8192
 VOLUME /data
-USER iris
+USER 1001
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/app/entrypoint.sh"]
