@@ -8,10 +8,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { generatePairingCode } from '../src/platforms/pairing/code-gen';
-import { PairingStore } from '../src/platforms/pairing/store';
-import { PairingGuard } from '../src/platforms/pairing/guard';
-import { PairingConfig } from '../src/platforms/pairing/types';
+import { generatePairingCode, PairingStore, PairingGuard } from '@irises/extension-sdk/pairing';
+import type { PairingConfig } from '@irises/extension-sdk/pairing';
 
 describe('Pairing System', () => {
   let testDataDir: string;

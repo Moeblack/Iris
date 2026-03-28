@@ -24,6 +24,33 @@
 - 运行时直接注入内联插件（inline plugin）
 - 通过 Backend EventEmitter 发射和监听自定义事件
 
+## 公共 SDK 边界
+
+插件与 extension 的公共接口现在统一由 `@irises/extension-sdk` 提供。
+
+- 插件 API：`@irises/extension-sdk/plugin`
+- 配对能力：`@irises/extension-sdk/pairing`
+- 平台 extension 公共类型与 helper：`@irises/extension-sdk`
+
+外部仓库建议直接安装：
+
+```bash
+npm install @irises/extension-sdk
+```
+
+典型导入方式：
+
+```typescript
+import { definePlugin, type IrisPlugin, type PluginContext, type PreBootstrapContext } from '@irises/extension-sdk/plugin';
+import { PairingGuard, PairingStore, type PairingConfig } from '@irises/extension-sdk/pairing';
+```
+
+不要再直接 import 宿主内部源码，例如：
+
+- `src/plugins/**`
+- `src/platforms/pairing/**`
+- `src/core/**`
+
 ## 文件结构
 
 ```
@@ -57,15 +84,21 @@ extension 目录结构示例：
 ~/.iris/extensions/
 ├── my-extension/
 │   ├── manifest.json     extension 清单
-│   ├── index.ts          插件入口（必须 export default 一个 IrisPlugin，或在 manifest.plugin.entry 中指定）
+│   ├── package.json      extension 自己的依赖声明
+│   ├── src/index.ts      源码入口（开发态）
+│   ├── dist/index.mjs    运行入口（发行态）
 │   ├── config.yaml       插件默认配置（可选）
 │   └── README.md         说明文档（可选）
 └── another-extension/
     ├── manifest.json
-    └── platform.mjs
+    └── dist/index.mjs
 ```
 
-入口文件查找顺序：`index.ts` → `index.js` → `index.mjs`
+说明：
+
+- 开发态可保留源码文件并在仓库内联调
+- 正式分发给用户安装的 extension，应当已经带有可运行产物，例如 `dist/index.mjs`
+- 用户安装 extension 时不再额外执行依赖安装
 
 ---
 
@@ -131,6 +164,8 @@ plugins:
 除 `local` 和 `npm` 外，插件系统还支持**运行时直接注入**的内联插件。它不从 `plugins.yaml` 读取，而是在调用 `bootstrap()` 时通过 `inlinePlugins` 传入。`PluginInfo.type` 中的 `inline` 就表示这种来源。
 
 ```typescript
+import type { IrisPlugin } from '@irises/extension-sdk/plugin';
+
 const inlinePlugin: IrisPlugin = {
   name: 'runtime-audit',
   version: '1.0.0',
@@ -154,6 +189,8 @@ await bootstrap({
 
 ## 插件接口：IrisPlugin
 
+这些类型由 `@irises/extension-sdk/plugin` 提供。
+
 ```typescript
 interface IrisPlugin {
   name: string;
@@ -173,6 +210,8 @@ interface IrisPlugin {
 ---
 
 ## 预启动阶段：PreBootstrapContext
+
+这些类型由 `@irises/extension-sdk/plugin` 提供。
 
 `preBootstrap()` 用来做真正的“系统装配”。插件可以在这里修改最终生效的配置，并注册新的 Provider 或平台工厂。
 
@@ -274,6 +313,8 @@ plugin.preBootstrap = (ctx) => {
 ## 插件上下文：PluginContext
 
 插件在 `activate()` 中收到一个 `PluginContext`，提供以下能力：
+
+这些类型由 `@irises/extension-sdk/plugin` 提供。
 
 ```typescript
 interface PluginContext {
@@ -551,6 +592,8 @@ router.unregisterModel('legacy-model');
 ## 延迟初始化：onReady + IrisAPI
 
 `activate()` 在 Backend 创建之前执行，因此此时无法访问 Backend。通过 `onReady()` 注册回调，在 Backend 创建完成后获得完整的内部 API：
+
+这些类型由 `@irises/extension-sdk/plugin` 提供。
 
 ```typescript
 interface IrisAPI {
@@ -892,9 +935,9 @@ bootstrap()
 
 ```typescript
 // ~/.iris/extensions/security-guard/index.ts
-import type { IrisPlugin } from 'iris';
+import { definePlugin, type IrisPlugin } from '@irises/extension-sdk/plugin';
 
-const plugin: IrisPlugin = {
+const plugin: IrisPlugin = definePlugin({
   name: 'security-guard',
   version: '2.0.0',
   description: '安全策略插件：审计日志 + 命令拦截 + 响应追踪 + 自定义命令',
@@ -970,7 +1013,7 @@ const plugin: IrisPlugin = {
 
     logger.info('安全策略插件已激活');
   },
-};
+});
 
 export default plugin;
 ```
@@ -980,14 +1023,16 @@ export default plugin;
 ## 开发插件步骤
 
 1. 在 `~/.iris/extensions/` 或仓库根目录 `./extensions/` 下创建 extension 目录
-2. 创建 `manifest.json`
-3. 创建插件入口文件，导出一个 `IrisPlugin` 对象
-4. 在 `activate()` 中使用 `ctx` 注册功能
-5. 可选：通过 `ctx.onPlatformsReady()` 修改平台行为
-6. 可选：通过 `ctx.onReady()` 获取 Backend 等内部对象
-7. 可选：通过 `api.patchMethod()` 替换内部方法
-8. 在 `~/.iris/configs/plugins.yaml` 中添加插件条目
-9. 重启 Iris
+2. 创建 `package.json`，安装 `@irises/extension-sdk`
+3. 创建 `manifest.json`
+4. 创建插件入口文件，导出一个 `IrisPlugin` 对象
+5. 在 `activate()` 中使用 `ctx` 注册功能
+6. 可选：通过 `ctx.onPlatformsReady()` 修改平台行为
+7. 可选：通过 `ctx.onReady()` 获取 Backend 等内部对象
+8. 如需平台对码能力，使用 `@irises/extension-sdk/pairing`
+9. 构建出可运行产物，例如 `dist/index.mjs`
+10. 在 `~/.iris/configs/plugins.yaml` 中添加插件条目
+11. 重启 Iris
 
 ## npm 包插件
 

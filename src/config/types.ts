@@ -3,7 +3,7 @@
  */
 
 import type { OCRConfig } from './ocr';
-import type { PairingConfig } from '../platforms/pairing/types';
+import type { PairingConfig } from '@irises/extension-sdk/pairing';
 
 export interface LLMConfig {
   provider: string;
