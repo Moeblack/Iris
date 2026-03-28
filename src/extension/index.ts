@@ -18,7 +18,7 @@ export {
 } from './registry';
 
 export {
-  getRemoteExtensionArchiveUrl,
+  getRemoteExtensionIndexUrl,
   installExtension,
   installLocalExtension,
 } from './installer';

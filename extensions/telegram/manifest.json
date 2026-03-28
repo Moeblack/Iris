@@ -22,5 +22,11 @@
         ]
       }
     }
-  ]
+  ],
+  "distribution": {
+    "files": [
+      "dist/index.mjs",
+      "package.json"
+    ]
+  }
 }

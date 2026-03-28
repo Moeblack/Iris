@@ -14,6 +14,8 @@
 8. extension 自己使用的第三方依赖，必须声明在 extension 自己的 `package.json` 中，并安装到 extension 自己目录下的 `node_modules/`。
 9. 外部 extension 建议放在独立仓库维护，并保留自己的锁文件；不要再假设会复用宿主仓库根目录的依赖树。
 10. 仓库根目录不再通过 `workspaces` 统一 hoist `extensions/*` 的依赖。
+11. 远程安装使用两层元数据：根目录 `extensions/index.json` 只列出扩展路径；每个扩展目录自己的 `manifest.json` 负责声明 `distribution.files`。
+12. `extensions/index.json` 与各扩展 `manifest.json` 中的 `distribution.files` 由 `npm run sync:extensions` 自动同步，不需要手工维护。
 
 ## 仓库内示例
 
@@ -123,17 +125,22 @@ iris ext <path>
 - `install-local <name>`：只从本地 `./extensions/` 安装，不访问远程仓库。
 - `install` 支持这些写法：`aaa`、`group/aaa`、`extensions/aaa`。
 - 最终安装目录统一写入 `~/.iris/extensions/<manifest.name>/`。
-- 可通过环境变量 `IRIS_EXTENSION_REMOTE_ARCHIVE_URL` 覆盖远程仓库压缩包地址。远程仓库不可用时会直接报错。
+- 默认会先读取远程仓库的 `extensions/index.json`，再按各扩展目录自己的 `manifest.json` 读取分发文件列表并只下载目标 extension 文件夹；可通过环境变量 `IRIS_EXTENSION_REMOTE_INDEX_URL` 和 `IRIS_EXTENSION_REMOTE_RAW_BASE_URL` 覆盖远程 index 与原始文件地址。远程仓库不可用时会直接报错。
 - 用户也可以直接打开远程仓库中的 `extensions/<folder>/` 目录，自行下载后放到本地安装。
 
 ### 远程目录约定
 
-当前远程安装不依赖 `registry.json`。安装命令会直接把参数映射到远程仓库目录：
+当前远程安装不依赖 `registry.json`。远程目录使用下面两层结构：
+
+- `extensions/index.json`：只列出有哪些 extension 路径
+- `extensions/<folder>/manifest.json`：扩展自己的 manifest，同时在 `distribution.files` 中声明发行文件列表
+
+安装命令会直接把参数映射到远程仓库目录：
 
 - `iris extension install aaa` → `extensions/aaa/`
 - `iris extension install community/demo-extension` → `extensions/community/demo-extension/`
 
-默认远程来源是 Iris 仓库 `main` 分支的压缩包，并从中提取对应目录。
+默认远程来源是 Iris 仓库 `main` 分支下的 `extensions/index.json` 与各扩展自己的 `manifest.json`、原始文件地址，并只下载对应目录。
 
 ### 1. 插件
 

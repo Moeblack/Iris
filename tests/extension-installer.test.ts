@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseExtensionCommandArgs } from '../src/extension/command.js';
 import { installExtension, installLocalExtension } from '../src/extension/installer.js';
@@ -24,23 +23,24 @@ function writeText(filePath: string, value: string): void {
   fs.writeFileSync(filePath, value, 'utf-8');
 }
 
-async function createZipBuffer(files: Record<string, string | Buffer>): Promise<Buffer> {
-  const zip = new JSZip();
-  for (const [filePath, value] of Object.entries(files)) {
-    zip.file(filePath, value);
-  }
-  return await zip.generateAsync({ type: 'nodebuffer' });
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
-function mockFetchWithMap(map: Record<string, Response>): void {
-  vi.stubGlobal('fetch', vi.fn(async (input: any) => {
+function mockFetchWithMap(map: Record<string, Response>) {
+  const fetchMock = vi.fn(async (input: any) => {
     const url = typeof input === 'string'
       ? input
       : input instanceof URL
         ? input.toString()
         : String(input?.url ?? input);
     return map[url] ?? new Response('not found', { status: 404, statusText: 'Not Found' });
-  }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 afterEach(() => {
@@ -130,50 +130,50 @@ describe('extension installer', () => {
     expect(fs.existsSync(path.join(installedExtensionsDir, 'source-first-demo'))).toBe(false);
   });
 
-  it('install 支持按远程 extensions 目录安装', async () => {
+  it('install 默认应按远程 index 与 manifest.distribution.files 只下载目标 extension 文件夹', async () => {
     const installedExtensionsDir = createTempDir('iris-ext-installed-');
-    const remoteArchiveUrl = 'https://example.com/Iris-main.zip';
-    const archive = await createZipBuffer({
-      'Iris-main/extensions/community/demo-extension/manifest.json': JSON.stringify({
+    const remoteIndexUrl = 'https://example.com/extensions/index.json';
+    const remoteRawBaseUrl = 'https://example.com/raw';
+
+    const fetchMock = mockFetchWithMap({
+      [remoteIndexUrl]: jsonResponse({
+        extensions: ['community/demo-extension', 'another-extension'],
+      }),
+      [`${remoteRawBaseUrl}/extensions/community/demo-extension/manifest.json`]: new Response(JSON.stringify({
         name: 'remote-demo-extension',
         version: '1.2.3',
         platforms: [
           { name: 'remote-demo-extension', entry: 'dist/index.mjs' },
         ],
-      }, null, 2),
-      'Iris-main/extensions/community/demo-extension/dist/index.mjs': 'export default {};\n',
-      'Iris-main/extensions/community/demo-extension/assets/readme.md': '# demo\n',
-    });
-
-    mockFetchWithMap({
-      [remoteArchiveUrl]: new Response(archive, { status: 200 }),
+        distribution: {
+          files: ['dist/index.mjs', 'assets/readme.md'],
+        },
+      }, null, 2), { status: 200 }),
+      [`${remoteRawBaseUrl}/extensions/community/demo-extension/dist/index.mjs`]: new Response('export default {};\n', { status: 200 }),
+      [`${remoteRawBaseUrl}/extensions/community/demo-extension/assets/readme.md`]: new Response('# demo\n', { status: 200 }),
     });
 
     const result = await installExtension('community/demo-extension', {
-      remoteArchiveUrl,
-      remoteArchiveRootDir: 'Iris-main',
+      remoteIndexUrl,
+      remoteRawBaseUrl,
       installedExtensionsDir,
     });
+    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
 
     expect(result.source).toBe('remote');
     expect(result.remotePath).toBe('extensions/community/demo-extension');
     expect(result.name).toBe('remote-demo-extension');
     expect(result.targetDir).toBe(path.join(installedExtensionsDir, 'remote-demo-extension'));
-    expect(fs.existsSync(path.join(installedExtensionsDir, 'remote-demo-extension', 'dist', 'index.mjs'))).toBe(true);
-    expect(fs.existsSync(path.join(installedExtensionsDir, 'remote-demo-extension', 'assets', 'readme.md'))).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, 'dist', 'index.mjs'))).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, 'assets', 'readme.md'))).toBe(true);
+    expect(calledUrls.some((url) => url.includes('another-extension') && url !== remoteIndexUrl)).toBe(false);
   });
 
   it('install 在远程目录不存在时会回退到本地安装', async () => {
     const localExtensionsDir = createTempDir('iris-ext-local-');
     const installedExtensionsDir = createTempDir('iris-ext-installed-');
-    const remoteArchiveUrl = 'https://example.com/Iris-main.zip';
+    const remoteIndexUrl = 'https://example.com/extensions/index.json';
     const sourceDir = path.join(localExtensionsDir, 'fallback-demo');
-    const archive = await createZipBuffer({
-      'Iris-main/extensions/another-extension/manifest.json': JSON.stringify({
-        name: 'another-extension',
-        version: '0.0.1',
-      }, null, 2),
-    });
 
     writeJson(path.join(sourceDir, 'manifest.json'), {
       name: 'fallback-demo',
@@ -181,12 +181,13 @@ describe('extension installer', () => {
     });
     writeText(path.join(sourceDir, 'index.mjs'), 'export default {};\n');
     mockFetchWithMap({
-      [remoteArchiveUrl]: new Response(archive, { status: 200 }),
+      [remoteIndexUrl]: jsonResponse({
+        extensions: ['another-extension'],
+      }),
     });
 
     const result = await installExtension('fallback-demo', {
-      remoteArchiveUrl,
-      remoteArchiveRootDir: 'Iris-main',
+      remoteIndexUrl,
       localExtensionsDir,
       installedExtensionsDir,
     });
@@ -200,7 +201,7 @@ describe('extension installer', () => {
   it('install 在远程仓库不可用时直接报错，不回退到本地安装', async () => {
     const localExtensionsDir = createTempDir('iris-ext-local-');
     const installedExtensionsDir = createTempDir('iris-ext-installed-');
-    const remoteArchiveUrl = 'https://example.com/Iris-main.zip';
+    const remoteIndexUrl = 'https://example.com/extensions/index.json';
     const sourceDir = path.join(localExtensionsDir, 'fallback-demo');
 
     writeJson(path.join(sourceDir, 'manifest.json'), {
@@ -210,11 +211,11 @@ describe('extension installer', () => {
     writeText(path.join(sourceDir, 'index.mjs'), 'export default {};\n');
 
     mockFetchWithMap({
-      [remoteArchiveUrl]: new Response('not found', { status: 404, statusText: 'Not Found' }),
+      [remoteIndexUrl]: new Response('not found', { status: 404, statusText: 'Not Found' }),
     });
 
     await expect(installExtension('fallback-demo', {
-      remoteArchiveUrl,
+      remoteIndexUrl,
       localExtensionsDir,
       installedExtensionsDir,
     })).rejects.toThrow('远程 extension 仓库不可用');

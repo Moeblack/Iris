@@ -85,6 +85,6 @@ iris extension
 
 `extension` 会先显示“下载插件”和“管理插件”两个入口：
 
-- `下载插件`：从远程仓库读取 `extensions/**/manifest.json`，显示类型、名称、描述和安装状态，再执行下载安装。
+- `下载插件`：先读取远程仓库的 `extensions/index.json`，再按各扩展目录自己的 `manifest.json` 读取类型、名称、描述和安装状态，最后只下载所选 extension 文件夹。
 - `下载插件` 会兼容当前安装目录中的内嵌 extension，并在存在同名本地版本时提示“本地已有版本 xx”。
 - `管理插件`：查看 `~/.iris/extensions/` 中已安装的 extension，并执行开启、关闭、删除。运行时同名优先级为：`~/.iris/extensions/` 已安装版本 > 安装目录内嵌版本。

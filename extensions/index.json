@@ -1,0 +1,10 @@
+{
+  "extensions": [
+    "discord",
+    "lark",
+    "qq",
+    "telegram",
+    "weixin",
+    "wxwork"
+  ]
+}

@@ -1,16 +1,19 @@
 import fs from "node:fs"
 import path from "node:path"
-import JSZip from "jszip"
 import { parse, stringify } from "yaml"
 import { resolveRuntimeConfigDir, resolveRuntimeDataDir } from "../runtime-paths.js"
 
 const MANIFEST_FILE = "manifest.json"
 const DISABLED_MARKER_FILE = ".disabled"
-const DEFAULT_REMOTE_EXTENSION_ARCHIVE_URL = "https://codeload.github.com/lianues/Iris/zip/refs/heads/main"
-const DEFAULT_REMOTE_EXTENSION_ARCHIVE_ROOT_DIR = "Iris-main"
+const DEFAULT_REMOTE_EXTENSION_INDEX_URL = "https://raw.githubusercontent.com/Lianues/Iris/main/extensions/index.json"
+const DEFAULT_REMOTE_EXTENSION_RAW_BASE_URL = "https://raw.githubusercontent.com/Lianues/Iris/main"
 const DEFAULT_REMOTE_EXTENSIONS_SUBDIR = "extensions"
 const SOURCE_FILE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"])
 const RUNTIME_FILE_EXTENSIONS = new Set([".mjs", ".js", ".cjs"])
+
+interface RemoteIndexLike {
+  extensions?: string[]
+}
 
 interface ExtensionPluginContributionLike {
   entry?: string
@@ -22,6 +25,10 @@ interface ExtensionPlatformContributionLike {
   entry?: string
 }
 
+interface ExtensionDistributionContributionLike {
+  files?: string[]
+}
+
 interface ExtensionManifestLike {
   name?: string
   version?: string
@@ -29,6 +36,7 @@ interface ExtensionManifestLike {
   entry?: string
   plugin?: ExtensionPluginContributionLike
   platforms?: ExtensionPlatformContributionLike[]
+  distribution?: ExtensionDistributionContributionLike
 }
 
 interface EditablePluginEntry {
@@ -127,15 +135,12 @@ function getEmbeddedExtensionsDir(installDir: string): string {
   return path.join(path.resolve(installDir), "extensions")
 }
 
-function getRemoteExtensionArchiveUrl(): string {
-  return process.env.IRIS_EXTENSION_REMOTE_ARCHIVE_URL?.trim() || DEFAULT_REMOTE_EXTENSION_ARCHIVE_URL
+function getRemoteIndexUrl(): string {
+  return process.env.IRIS_EXTENSION_REMOTE_INDEX_URL?.trim() || DEFAULT_REMOTE_EXTENSION_INDEX_URL
 }
 
-function getRemoteArchiveRootDir(): string {
-  return normalizeRelativeFilePath(
-    process.env.IRIS_EXTENSION_REMOTE_ARCHIVE_ROOT_DIR?.trim() || DEFAULT_REMOTE_EXTENSION_ARCHIVE_ROOT_DIR,
-    "远程压缩包根目录",
-  )
+function getRemoteRawBaseUrl(): string {
+  return process.env.IRIS_EXTENSION_REMOTE_RAW_BASE_URL?.trim() || DEFAULT_REMOTE_EXTENSION_RAW_BASE_URL
 }
 
 function getRemoteExtensionsSubdir(): string {
@@ -143,6 +148,10 @@ function getRemoteExtensionsSubdir(): string {
     process.env.IRIS_EXTENSION_REMOTE_SUBDIR?.trim() || DEFAULT_REMOTE_EXTENSIONS_SUBDIR,
     "远程 extension 根目录",
   )
+}
+
+function encodeRepoPathForUrl(repoPath: string): string {
+  return repoPath.split("/").map((part) => encodeURIComponent(part)).join("/")
 }
 
 function resolveSafeRelativePath(rootDir: string, relativePath: string): string {
@@ -356,23 +365,6 @@ function collectRelativeFilesFromDir(rootDir: string): string[] {
   return files
 }
 
-function stripArchivePrefix(entryName: string, rootPrefix: string): string | undefined {
-  const normalizedEntry = normalizeZipEntryName(entryName)
-  const normalizedRoot = normalizeZipEntryName(rootPrefix)
-
-  if (normalizedEntry === normalizedRoot) return ""
-  if (normalizedEntry.startsWith(`${normalizedRoot}/`)) {
-    return normalizedEntry.slice(normalizedRoot.length + 1)
-  }
-
-  const marker = `/${normalizedRoot}/`
-  const markerIndex = normalizedEntry.indexOf(marker)
-  if (markerIndex >= 0) {
-    return normalizedEntry.slice(markerIndex + marker.length)
-  }
-
-  return undefined
-}
 
 function readEditablePluginEntries(): EditablePluginEntry[] {
   const pluginsPath = path.join(resolveRuntimeConfigDir(), "plugins.yaml")
@@ -568,14 +560,51 @@ function buildSummary(
   }
 }
 
-async function fetchArchiveZip(): Promise<JSZip> {
-  const response = await fetch(getRemoteExtensionArchiveUrl())
+async function fetchBuffer(url: string, label: string): Promise<Buffer> {
+  const response = await fetch(url)
   if (!response.ok) {
-    throw new Error(`远程 extension 仓库读取失败 (${response.status} ${response.statusText})`)
+    throw new Error(`${label} 下载失败 (${response.status} ${response.statusText}): ${url}`)
   }
 
-  const archiveBuffer = Buffer.from(await response.arrayBuffer())
-  return await JSZip.loadAsync(archiveBuffer)
+  return Buffer.from(await response.arrayBuffer())
+}
+
+async function fetchJson<T>(url: string, label: string): Promise<T> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`${label} 读取失败 (${response.status} ${response.statusText}): ${url}`)
+  }
+
+  return await response.json() as T
+}
+
+async function fetchRemoteIndex(): Promise<string[]> {
+  const raw = await fetchJson<RemoteIndexLike>(getRemoteIndexUrl(), "远程 extension 索引")
+  if (!Array.isArray(raw.extensions)) {
+    throw new Error("远程 extension 索引返回格式无效")
+  }
+
+  return raw.extensions.map((entry) => normalizeRequestedExtensionPath(String(entry), "远程 extension 路径"))
+}
+
+function buildRemoteExtensionFileUrl(requestedPath: string, relativePath: string): string {
+  const repoPath = `${getRemoteExtensionsSubdir()}/${requestedPath}/${relativePath}`
+  return `${getRemoteRawBaseUrl()}/${encodeRepoPathForUrl(repoPath)}`
+}
+
+function getRemoteDistributionFiles(manifest: ExtensionManifestLike): string[] {
+  return Array.isArray(manifest.distribution?.files)
+    ? manifest.distribution.files.map((file) => normalizeRelativeFilePath(String(file), "远程 extension 文件路径"))
+    : []
+}
+
+function getRemoteManifestUrl(requestedPath: string): string {
+  return buildRemoteExtensionFileUrl(requestedPath, MANIFEST_FILE)
+}
+
+async function fetchRemoteManifest(requestedPath: string): Promise<ExtensionManifestLike> {
+  const raw = await fetchJson<unknown>(getRemoteManifestUrl(requestedPath), "extension manifest")
+  return parseExtensionManifest(raw, `${requestedPath}/${MANIFEST_FILE}`)
 }
 
 export function loadInstalledExtensions(): ExtensionSummary[] {
@@ -672,34 +701,34 @@ function buildLocalVersionHint(summary: ExtensionSummary): string {
 }
 
 export async function listRemoteExtensions(installDir: string): Promise<ExtensionSummary[]> {
-  const zip = await fetchArchiveZip()
+  const remoteEntries = (await Promise.allSettled(
+    (await fetchRemoteIndex()).map(async (requestedPath) => {
+      const manifest = await fetchRemoteManifest(requestedPath)
+      return {
+        requestedPath,
+        manifest,
+        files: getRemoteDistributionFiles(manifest),
+      }
+    }),
+  ))
+    .filter((item): item is PromiseFulfilledResult<{ requestedPath: string; manifest: ExtensionManifestLike; files: string[] }> => {
+      return item.status === "fulfilled"
+    })
+    .map((item) => item.value)
   const installedMap = new Map(loadInstalledExtensions().map((item) => [item.name, item]))
   const embeddedMap = new Map(loadEmbeddedExtensions(installDir).map((item) => [item.name, item]))
-  const prefix = `${getRemoteArchiveRootDir()}/${getRemoteExtensionsSubdir()}`
   const results: ExtensionSummary[] = []
   const seenRequestedPaths = new Set<string>()
 
-  for (const fileEntry of Object.values(zip.files)) {
-    if (fileEntry.dir) continue
-
-    const relativePath = stripArchivePrefix(fileEntry.name, prefix)
-    if (!relativePath) continue
-    if (path.posix.basename(relativePath) !== MANIFEST_FILE) continue
-
-    const requestedPath = normalizeRelativeFilePath(path.posix.dirname(relativePath), "远程 extension 目录")
+  for (const entry of remoteEntries) {
+    const requestedPath = entry.requestedPath
     if (seenRequestedPaths.has(requestedPath)) continue
 
     try {
-      const requestedPrefix = `${prefix}/${requestedPath}`
-      const requestedFiles = Object.values(zip.files)
-        .filter((item) => !item.dir)
-        .map((item) => stripArchivePrefix(item.name, requestedPrefix))
-        .filter((item): item is string => !!item)
-      const manifest = parseExtensionManifest(JSON.parse(await fileEntry.async("text")), fileEntry.name)
-      const distribution = analyzeDistribution(requestedFiles, manifest)
-      const local = installedMap.get(manifest.name!) ?? embeddedMap.get(manifest.name!)
+      const distribution = analyzeDistribution(entry.files, entry.manifest)
+      const local = installedMap.get(entry.manifest.name!) ?? embeddedMap.get(entry.manifest.name!)
 
-      results.push(buildSummary(requestedPath, manifest, local ? {
+      results.push(buildSummary(requestedPath, entry.manifest, local ? {
         installed: local.installed,
         enabled: local.enabled,
         stateLabel: local.stateLabel,
@@ -733,42 +762,45 @@ export async function installRemoteExtension(requestedPath: string): Promise<Ext
   const tempDir = createTempInstallDir(installedRootDir)
 
   try {
-    const zip = await fetchArchiveZip()
-    const prefix = `${getRemoteArchiveRootDir()}/${getRemoteExtensionsSubdir()}/${requested}`
-    let extractedCount = 0
-
-    for (const fileEntry of Object.values(zip.files)) {
-      if (fileEntry.dir) continue
-      const relativePath = stripArchivePrefix(fileEntry.name, prefix)
-      if (!relativePath) continue
-
-      const normalizedRelativePath = normalizeRelativeFilePath(relativePath)
-      const destination = resolveSafeRelativePath(tempDir, normalizedRelativePath)
-      ensureDirectory(path.dirname(destination))
-      fs.writeFileSync(destination, await fileEntry.async("nodebuffer"))
-      extractedCount += 1
-    }
-
-    if (extractedCount === 0) {
+    const remoteIndex = await fetchRemoteIndex()
+    if (!remoteIndex.includes(requested)) {
       throw new Error(`远程 extension 目录不存在: ${requested}`)
     }
 
-    const manifest = readManifestFromDir(tempDir)
-    if (!manifest) {
+    const manifest = await fetchRemoteManifest(requested)
+    const files = getRemoteDistributionFiles(manifest)
+
+    ensureDirectory(tempDir)
+    fs.writeFileSync(
+      path.join(tempDir, MANIFEST_FILE),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf-8",
+    )
+
+    for (const relativePath of files) {
+      const normalizedRelativePath = normalizeRelativeFilePath(relativePath)
+      if (normalizedRelativePath === MANIFEST_FILE) continue
+      const destination = resolveSafeRelativePath(tempDir, normalizedRelativePath)
+      ensureDirectory(path.dirname(destination))
+      fs.writeFileSync(destination, await fetchBuffer(buildRemoteExtensionFileUrl(requested, normalizedRelativePath), "extension 文件"))
+    }
+
+    const installedManifest = readManifestFromDir(tempDir)
+    if (!installedManifest) {
       throw new Error(`远程 extension 目录缺少 manifest.json: ${requested}`)
     }
 
-    const distribution = analyzeDistribution(collectRelativeFilesFromDir(tempDir), manifest)
+    const distribution = analyzeDistribution(collectRelativeFilesFromDir(tempDir), installedManifest)
     if (distribution.distributionMode !== "bundled") {
       throw new Error(distribution.distributionDetail)
     }
 
-    const targetDir = path.join(installedRootDir, manifest.name!)
+    const targetDir = path.join(installedRootDir, installedManifest.name!)
     fs.rmSync(targetDir, { recursive: true, force: true })
     fs.renameSync(tempDir, targetDir)
 
-    const state = resolveInstalledState(manifest, targetDir)
-    return buildSummary(requested, manifest, {
+    const state = resolveInstalledState(installedManifest, targetDir)
+    return buildSummary(requested, installedManifest, {
       rootDir: targetDir,
       installed: true,
       enabled: state.enabled,
@@ -776,8 +808,8 @@ export async function installRemoteExtension(requestedPath: string): Promise<Ext
       statusDetail: state.statusDetail,
       localSource: "installed",
       localSourceLabel: "已安装",
-      localVersion: manifest.version!,
-      localVersionHint: `本地已有版本 ${manifest.version!}（已安装，运行时优先于源码内嵌）`,
+      localVersion: installedManifest.version!,
+      localVersionHint: `本地已有版本 ${installedManifest.version!}（已安装，运行时优先于源码内嵌）`,
       distributionMode: distribution.distributionMode,
       distributionLabel: distribution.distributionLabel,
       distributionDetail: distribution.distributionDetail,

@@ -13,6 +13,11 @@ export interface ExtensionPluginContribution {
   configFile?: string;
 }
 
+export interface ExtensionDistributionContribution {
+  /** 可直接安装发行包需要下载的文件列表，相对 extension 根目录 */
+  files?: string[];
+}
+
 export type ExtensionPlatformPanelFieldType = 'string' | 'password' | 'number';
 
 export interface ExtensionPlatformPanelField {
@@ -82,6 +87,8 @@ export interface ExtensionManifest {
   plugin?: ExtensionPluginContribution;
   /** 平台贡献 */
   platforms?: ExtensionPlatformContribution[];
+  /** 发行包元数据 */
+  distribution?: ExtensionDistributionContribution;
 }
 
 export type ExtensionSource = 'installed' | 'workspace';
