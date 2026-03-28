@@ -41,16 +41,28 @@ src/plugins/
 
 ## 插件目录
 
-插件存放在 `~/.iris/plugins/` 下，每个插件一个子目录：
+当前本地插件来源有两类：
+
+1. 已安装 extension 目录 `~/.iris/extensions/`
+2. 源码仓库收录目录 `./extensions/`
+
+其中 extension 可以同时贡献：
+
+- plugin
+- platform（原先 channel 的能力）
+
+extension 目录结构示例：
 
 ```
-~/.iris/plugins/
-├── my-plugin/
-│   ├── index.ts          入口文件（必须 export default 一个 IrisPlugin）
+~/.iris/extensions/
+├── my-extension/
+│   ├── manifest.json     extension 清单
+│   ├── index.ts          插件入口（必须 export default 一个 IrisPlugin，或在 manifest.plugin.entry 中指定）
 │   ├── config.yaml       插件默认配置（可选）
 │   └── README.md         说明文档（可选）
-└── another-plugin/
-    └── index.ts
+└── another-extension/
+    ├── manifest.json
+    └── platform.mjs
 ```
 
 入口文件查找顺序：`index.ts` → `index.js` → `index.mjs`
@@ -79,7 +91,7 @@ plugins:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | `string` | 是 | 插件名称。本地插件对应 `~/.iris/plugins/<name>/`；npm 插件对应 `iris-plugin-<name>` |
+| `name` | `string` | 是 | 插件名称。本地插件按 `~/.iris/extensions/<name>/` → `./extensions/<name>/` 顺序查找；npm 插件对应 `iris-plugin-<name>` |
 | `type` | `'local' \| 'npm'` | 否 | 插件来源类型，默认 `local` |
 | `enabled` | `boolean` | 否 | 是否启用，默认 `true` |
 | `priority` | `number` | 否 | 插件优先级。数值越大越先执行，默认 `0` |
@@ -89,14 +101,14 @@ plugins:
 
 配置合并规则：
 
-1. 若本地插件目录下存在 `config.yaml`，先读取它作为基础配置
+1. 若 extension 根目录下存在 `config.yaml`，先读取它作为基础配置
 2. 再用 `plugins.yaml` 中该插件条目的 `config` 覆盖同名字段
 3. 当前实现是**浅合并**，不是深度合并
 
 例如：
 
 ```yaml
-# ~/.iris/plugins/demo/config.yaml
+# ~/.iris/extensions/demo/config.yaml
 http:
   timeout: 3000
   headers:
@@ -879,7 +891,7 @@ bootstrap()
 ## 完整示例
 
 ```typescript
-// ~/.iris/plugins/security-guard/index.ts
+// ~/.iris/extensions/security-guard/index.ts
 import type { IrisPlugin } from 'iris';
 
 const plugin: IrisPlugin = {
@@ -967,14 +979,15 @@ export default plugin;
 
 ## 开发插件步骤
 
-1. 在 `~/.iris/plugins/` 下创建插件目录
-2. 创建 `index.ts`，导出一个 `IrisPlugin` 对象
-3. 在 `activate()` 中使用 `ctx` 注册功能
-4. 可选：通过 `ctx.onPlatformsReady()` 修改平台行为
-5. 可选：通过 `ctx.onReady()` 获取 Backend 等内部对象
-6. 可选：通过 `api.patchMethod()` 替换内部方法
-7. 在 `~/.iris/configs/plugins.yaml` 中添加插件条目
-8. 重启 Iris
+1. 在 `~/.iris/extensions/` 或仓库根目录 `./extensions/` 下创建 extension 目录
+2. 创建 `manifest.json`
+3. 创建插件入口文件，导出一个 `IrisPlugin` 对象
+4. 在 `activate()` 中使用 `ctx` 注册功能
+5. 可选：通过 `ctx.onPlatformsReady()` 修改平台行为
+6. 可选：通过 `ctx.onReady()` 获取 Backend 等内部对象
+7. 可选：通过 `api.patchMethod()` 替换内部方法
+8. 在 `~/.iris/configs/plugins.yaml` 中添加插件条目
+9. 重启 Iris
 
 ## npm 包插件
 

@@ -45,6 +45,9 @@ export const sessionDbPath = path.join(dataDir, 'iris.db');
 /** 记忆数据库默认路径 */
 export const memoryDbPath = path.join(dataDir, 'memory.db');
 
+/** 已安装 extension 目录 */
+export const extensionsDir = path.join(dataDir, 'extensions');
+
 /** 项目根目录（用于定位 data/configs.example/ 等内置资源） */
 const __filename_paths = fileURLToPath(import.meta.url);
 
@@ -71,6 +74,9 @@ function resolveProjectRoot(): string {
 }
 
 export const projectRoot = resolveProjectRoot();
+
+/** 源码仓库中的 extension 收录目录 */
+export const workspaceExtensionsDir = path.join(projectRoot, 'extensions');
 
 /** 是否运行在编译后的独立二进制中（import.meta.url 对应的 data/ 不存在） */
 export const isCompiledBinary = !fs.existsSync(

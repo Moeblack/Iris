@@ -48,6 +48,7 @@ import { createBootstrapExtensionRegistry, type BootstrapExtensionRegistry } fro
 import type { PlatformRegistry } from './platforms/registry';
 import { PluginEventBus } from './plugins/event-bus';
 import { patchMethod, patchPrototype } from './plugins/patch';
+import { registerExtensionPlatforms } from './extension';
 import type { IrisAPI, InlinePluginEntry } from './plugins/types';
 
 export interface BootstrapResult {
@@ -95,6 +96,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
   const configDir = findConfigFile(agentPaths?.configDir);
   const config = loadConfig(agentPaths?.configDir, agentPaths);
   const extensions = createBootstrapExtensionRegistry();
+  registerExtensionPlatforms(extensions.platforms);
 
   // ---- 0. 预加载插件 + PreBootstrap 阶段 ----
   const inlinePlugins = options?.inlinePlugins ?? [];

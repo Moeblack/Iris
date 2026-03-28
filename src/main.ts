@@ -8,6 +8,8 @@
  *   iris serve                  → 启动平台服务
  *   iris start                  → 启动平台服务（serve 别名）
  *   iris onboard                → 启动交互式配置引导
+ *   iris extension install <path>      → 从远程仓库的 extensions/<path>/ 安装 extension
+ *   iris ext install-local <name>      → 仅从本地 extension 目录安装
  *   iris -p "prompt"            → CLI 模式
  *   iris "prompt"               → CLI 模式
  *   iris --help                 → 显示帮助
@@ -55,6 +57,17 @@ function runOnboard(): never {
 
 if (args[0] === 'onboard') {
   runOnboard();
+}
+
+if (args[0] === 'extension' || args[0] === 'extensions' || args[0] === 'ext') {
+  try {
+    const { runExtensionCommand } = await import('./extension/command');
+    await runExtensionCommand(args);
+    process.exit(0);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
 
 // ============ Sidecar 模式（内部使用） ============

@@ -2,14 +2,12 @@
  * 插件管理器
  *
  * 负责插件的发现、预加载、预启动、激活和停用。
- * 支持本地目录插件（~/.iris/plugins/）和 npm 包插件（iris-plugin-*）。
+ * 支持统一 extension 目录（~/.iris/extensions/、./extensions/）和 npm 包插件（iris-plugin-*）。
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
 import { parse as parseYAML } from 'yaml';
 import { createLogger } from '../logger';
-import { dataDir } from '../paths';
 import type { ToolRegistry } from '../tools/registry';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
@@ -20,11 +18,13 @@ import type { IrisPlugin, PluginEntry, InlinePluginEntry, PluginHook, PluginInfo
 import { PluginContextImpl } from './context';
 import { PreBootstrapContextImpl } from './prebootstrap-context';
 import type { PlatformAdapter } from '../platforms/base';
+import {
+  importLocalExtensionModule,
+  resolveLocalPluginSource,
+  type ResolvedLocalPlugin,
+} from '../extension';
 
 const logger = createLogger('PluginManager');
-
-/** 插件目录 */
-export const pluginsDir = path.join(dataDir, 'plugins');
 
 interface PreparedPlugin {
   entry: PluginEntry;
@@ -56,9 +56,9 @@ export class PluginManager {
       }
 
       try {
-        const plugin = await this.resolvePlugin(entry);
-        const pluginConfig = this.loadPluginConfig(entry);
-        this.prepared.push({ entry, plugin, pluginConfig });
+        const resolved = await this.resolvePlugin(entry);
+        const pluginConfig = this.loadPluginConfig(entry, resolved.localSource);
+        this.prepared.push({ entry, plugin: resolved.plugin, pluginConfig });
       } catch (err) {
         logger.error(`插件 "${entry.name}" 预加载失败:`, err);
       }
@@ -262,36 +262,20 @@ export class PluginManager {
     logger.info(`插件 "${prepared.plugin.name}@${prepared.plugin.version}" 已激活`);
   }
 
-  private async resolvePlugin(entry: PluginEntry): Promise<IrisPlugin> {
+  private async resolvePlugin(entry: PluginEntry): Promise<{ plugin: IrisPlugin; localSource?: ResolvedLocalPlugin }> {
     const type = entry.type ?? 'local';
-    if (type === 'npm') return this.loadNpmPlugin(entry.name);
+    if (type === 'npm') {
+      return { plugin: await this.loadNpmPlugin(entry.name) };
+    }
     return this.loadLocalPlugin(entry.name);
   }
 
-  private async loadLocalPlugin(name: string): Promise<IrisPlugin> {
-    const pluginDir = path.join(pluginsDir, name);
-    if (!fs.existsSync(pluginDir)) {
-      throw new Error(`插件目录不存在: ${pluginDir}`);
-    }
-
-    const candidates = ['index.ts', 'index.js', 'index.mjs'];
-    let entryFile: string | undefined;
-    for (const candidate of candidates) {
-      const filePath = path.join(pluginDir, candidate);
-      if (fs.existsSync(filePath)) {
-        entryFile = filePath;
-        break;
-      }
-    }
-
-    if (!entryFile) {
-      throw new Error(`插件 "${name}" 缺少入口文件（index.ts 或 index.js）: ${pluginDir}`);
-    }
-
-    const mod = await import(entryFile);
+  private async loadLocalPlugin(name: string): Promise<{ plugin: IrisPlugin; localSource: ResolvedLocalPlugin }> {
+    const localSource = resolveLocalPluginSource(name);
+    const mod = await importLocalExtensionModule(localSource.entryFile);
     const plugin = mod.default ?? mod;
     this.validatePlugin(plugin, name);
-    return plugin as IrisPlugin;
+    return { plugin: plugin as IrisPlugin, localSource };
   }
 
   private async loadNpmPlugin(name: string): Promise<IrisPlugin> {
@@ -316,13 +300,12 @@ export class PluginManager {
     if (typeof p.activate !== 'function') throw new Error(`插件 "${name}" 缺少 activate 方法`);
   }
 
-  private loadPluginConfig(entry: PluginEntry): Record<string, unknown> | undefined {
+  private loadPluginConfig(entry: PluginEntry, localSource?: ResolvedLocalPlugin): Record<string, unknown> | undefined {
     let baseConfig: Record<string, unknown> | undefined;
 
-    const configPath = path.join(pluginsDir, entry.name, 'config.yaml');
-    if (fs.existsSync(configPath)) {
+    if (localSource?.configPath && fs.existsSync(localSource.configPath)) {
       try {
-        const raw = fs.readFileSync(configPath, 'utf-8');
+        const raw = fs.readFileSync(localSource.configPath, 'utf-8');
         const parsed = parseYAML(raw);
         if (parsed && typeof parsed === 'object') {
           baseConfig = parsed as Record<string, unknown>;
