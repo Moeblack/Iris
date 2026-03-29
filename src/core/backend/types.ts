@@ -84,8 +84,6 @@ export interface BackendConfig {
   currentLLMConfig?: LLMConfig;
   /** OCR 服务（当主模型不支持 vision 时回退使用） */
   ocrService?: OCRProvider;
-  /** Computer Use 截图保留的最近轮次数（默认 3） */
-  maxRecentScreenshots?: number;
   /** 用于 /compact 上下文压缩的模型名称（需在 LLMRouter 中已注册） */
   summaryModelName?: string;
   /** 上下文压缩提示词配置 */

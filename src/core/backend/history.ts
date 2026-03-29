@@ -5,7 +5,6 @@
  * - 从最后一条总结消息开始截取
  * - 图片/文档根据模型能力剥离或保留
  * - OCR 文本标记处理
- * - Computer Use 旧截图清理
  */
 
 import type { LLMConfig } from '../../config/types';
@@ -15,23 +14,14 @@ import type { Content, Part } from '../../types';
 import { isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isTextPart } from '../../types';
 import { IMAGE_UNAVAILABLE_NOTICE, DOCUMENT_UNAVAILABLE_NOTICE } from './types';
 
-/** Computer Use 工具函数名集合（用于截图剥离判断） */
-const COMPUTER_USE_FUNCTION_NAMES = new Set([
-  'get_screenshot', 'click_at', 'hover_at', 'type_text_at',
-  'scroll_document', 'scroll_at', 'key_combination', 'navigate',
-  'go_back', 'go_forward', 'search', 'wait_5_seconds', 'drag_and_drop',
-]);
-
 /**
  * 将存储的完整历史转换为 LLM 请求所用的历史。
  * - 从最后一条 isSummary 消息开始加载
  * - 对每条消息的 parts 调用 preparePartsForLLM 进行清理
- * - 剥离旧的 Computer Use 截图
  */
 export function prepareHistoryForLLM(
   history: Content[],
   currentLLMConfig?: LLMConfig,
-  maxRecentScreenshots: number = 3,
 ): Content[] {
   // 从最后一条总结消息开始加载上下文，跳过更早的历史
   let startIndex = 0;
@@ -50,11 +40,6 @@ export function prepareHistoryForLLM(
     durationMs: content.durationMs,
     streamOutputDurationMs: content.streamOutputDurationMs,
   }));
-
-  // Computer Use 截图清理：只保留最近 N 轮含截图的工具响应，
-  // 超出的旧轮次中把 functionResponse.parts（截图）剥离以节省 token。
-  // 与 Gemini 官方示例的处理逻辑一致。
-  stripOldScreenshots(prepared, maxRecentScreenshots);
 
   return prepared;
 }
@@ -154,40 +139,4 @@ export function preparePartsForLLM(parts: Part[], currentLLMConfig?: LLMConfig):
   }
 
   return prepared;
-}
-
-/**
- * 从历史末尾向前扫描，保留最近 max 轮含 Computer Use 截图
- * 的工具响应，超出部分把 functionResponse.parts 置空。
- * 直接修改传入的数组，不产生新对象。
- */
-function stripOldScreenshots(history: Content[], max: number): void {
-  if (max === Infinity) return;  // 全部保留
-
-  let screenshotTurns = 0;
-
-  for (let i = history.length - 1; i >= 0; i--) {
-    const content = history[i];
-    if (content.role !== 'user') continue;
-
-    // 检查此 user 轮是否包含带截图的 Computer Use 工具响应
-    const hasCUScreenshot = content.parts.some(
-      p => isFunctionResponsePart(p)
-        && p.functionResponse.parts?.length
-        && COMPUTER_USE_FUNCTION_NAMES.has(p.functionResponse.name),
-    );
-    if (!hasCUScreenshot) continue;
-
-    screenshotTurns++;
-    if (screenshotTurns > max) {
-      // 剥离此轮中所有 Computer Use 工具响应的截图
-      for (const part of content.parts) {
-        if (isFunctionResponsePart(part)
-          && part.functionResponse.parts?.length
-          && COMPUTER_USE_FUNCTION_NAMES.has(part.functionResponse.name)) {
-          part.functionResponse.parts = undefined;
-        }
-      }
-    }
-  }
 }

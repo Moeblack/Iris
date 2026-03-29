@@ -62,7 +62,6 @@ export class Backend extends EventEmitter {
   private defaultMode?: string;
   private currentLLMConfig?: LLMConfig;
   private ocrService?: OCRProvider;
-  private maxRecentScreenshots: number;
   private summaryModelName?: string;
   private summaryConfig?: SummaryConfig;
 
@@ -118,7 +117,6 @@ export class Backend extends EventEmitter {
     this.defaultMode = config?.defaultMode;
     this.currentLLMConfig = config?.currentLLMConfig;
     this.ocrService = config?.ocrService;
-    this.maxRecentScreenshots = config?.maxRecentScreenshots ?? 3;
     this.summaryModelName = config?.summaryModelName;
     this.summaryConfig = config?.summaryConfig;
 
@@ -608,7 +606,6 @@ export class Backend extends EventEmitter {
     systemPrompt?: string;
     currentLLMConfig?: LLMConfig;
     ocrService?: OCRProvider;
-    maxRecentScreenshots?: number;
     skills?: SkillDefinition[];
   }): void {
     if (opts.stream !== undefined) this.stream = opts.stream;
@@ -619,7 +616,6 @@ export class Backend extends EventEmitter {
     if (opts.systemPrompt !== undefined) this.prompt.setSystemPrompt(opts.systemPrompt);
     if ('currentLLMConfig' in opts) this.currentLLMConfig = opts.currentLLMConfig;
     if ('ocrService' in opts) this.ocrService = opts.ocrService;
-    if (opts.maxRecentScreenshots !== undefined) this.maxRecentScreenshots = opts.maxRecentScreenshots;
     if ('skills' in opts) {
       this.skills = opts.skills ?? [];
       this._onSkillsChanged?.();
@@ -699,7 +695,7 @@ export class Backend extends EventEmitter {
       }
     }
 
-    const history = prepareHistoryForLLM(storedHistory, this.currentLLMConfig, this.maxRecentScreenshots);
+    const history = prepareHistoryForLLM(storedHistory, this.currentLLMConfig);
     const isNewSession = storedHistory.length === 0;
     const userText = extractText(llmUserParts);
 

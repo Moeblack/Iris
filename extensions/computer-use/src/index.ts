@@ -7,6 +7,7 @@
  */
 
 import { definePlugin, createPluginLogger, type PluginContext, type IrisAPI } from '@irises/extension-sdk';
+import type { LLMRequest, Content, FunctionResponsePart } from '@irises/extension-sdk';
 import { parseComputerUseConfig } from './config.js';
 import { DEFAULT_CONFIG_TEMPLATE } from './config-template.js';
 import { buildPanelHTML } from './panel-html.js';
@@ -124,6 +125,46 @@ export default definePlugin({
 
       await initEnvironment(cuConfig, api);
       lastConfigSnapshot = JSON.stringify(rawConfig ?? null);
+    });
+
+    // 截图剥离钩子：在 LLM 请求前剥离工具响应中的旧截图，节省 token。
+    // 只保留最近 maxRecentScreenshots 轮含截图的工具响应。
+    ctx.addHook({
+      name: 'computer-use:strip-old-screenshots',
+      onBeforeLLMCall({ request }) {
+        if (!activeEnv) return undefined;
+
+        // 从当前生效的配置读取保留轮次（默认 3）
+        const rawCfg = ctx.readConfigSection('computer_use');
+        const cuCfg = rawCfg ? parseComputerUseConfig(rawCfg) : undefined;
+        const max = cuCfg?.maxRecentScreenshots ?? 3;
+        if (max === Infinity) return undefined;
+
+        let imageRounds = 0;
+        for (let i = request.contents.length - 1; i >= 0; i--) {
+          const content = request.contents[i];
+          if (content.role !== 'user') continue;
+
+          const hasScreenshot = content.parts.some(
+            p => 'functionResponse' in p
+              && (p as FunctionResponsePart).functionResponse.parts?.length
+              && COMPUTER_USE_FUNCTION_NAMES.has((p as FunctionResponsePart).functionResponse.name),
+          );
+          if (!hasScreenshot) continue;
+
+          imageRounds++;
+          if (imageRounds > max) {
+            for (const part of content.parts) {
+              if ('functionResponse' in part
+                && (part as FunctionResponsePart).functionResponse.parts?.length
+                && COMPUTER_USE_FUNCTION_NAMES.has((part as FunctionResponsePart).functionResponse.name)) {
+                (part as FunctionResponsePart).functionResponse.parts = undefined;
+              }
+            }
+          }
+        }
+        return { request };
+      },
     });
 
     // 注册配置重载钩子

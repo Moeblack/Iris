@@ -122,7 +122,7 @@ export interface IrisAPI {
 
 /** 扩展面板定义（由插件通过 registerWebPanel 注册，宿主 Web UI 动态渲染） */
 export interface WebPanelDefinition {
-  /** 面板唯一标识，如 'computer-use' */
+  /** 面板唯一标识 */
   id: string;
   /** 面板显示标题 */
   title: string;
