@@ -124,6 +124,8 @@ function buildPayload(): Record<string, any> {
   p.types = enabledTypes.value.length > 0 ? [...enabledTypes.value] : null
 
   for (const platform of platforms.value) {
+    // 无配置字段的平台（如 console）跳过，不写入空节点
+    if (platform.panelFields.length === 0) continue
     const section: Record<string, any> = {}
     const values = platformValues[platform.value] ?? {}
 

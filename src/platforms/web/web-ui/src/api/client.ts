@@ -38,8 +38,7 @@ function isManagementRequest(url: string): boolean {
     || url.startsWith('/api/config/')
     || url.startsWith('/api/deploy/')
     || url.startsWith('/api/cloudflare/')
-    || url.startsWith('/api/extensions/install')
-    || url.match(/\/api\/extensions\/[^/]+\/(enable|disable)$/) !== null
+    || url.startsWith('/api/extensions/')
 }
 
 /** 合并请求头 */

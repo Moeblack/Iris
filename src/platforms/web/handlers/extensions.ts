@@ -28,7 +28,6 @@ import {
   cleanupTempInstallDir,
   collectRelativeFilesFromDir,
   getInstalledExtensionsDir,
-  resolveRuntimeDataDir,
   resolveRuntimeConfigDir,
   fetchBuffer,
   fetchRemoteIndex,
@@ -39,7 +38,6 @@ import {
   describeRuntimeIssues,
   type ExtensionManifestLike,
 } from '@iris/extension-utils';
-import { projectRoot } from '../../../paths';
 
 // ==================== 类型 ====================
 
@@ -494,6 +492,7 @@ export function createExtensionHandlers(installDir: string) {
         try {
           const remoteIndex = await fetchRemoteIndex();
           if (!remoteIndex.includes(requested)) {
+            cleanupTempInstallDir(tempDir);
             sendJSON(res, 404, { error: `远程 extension 目录不存在: ${requested}` });
             return;
           }
@@ -514,12 +513,14 @@ export function createExtensionHandlers(installDir: string) {
 
           const installed = readManifestFromDir(tempDir);
           if (!installed) {
+            cleanupTempInstallDir(tempDir);
             sendJSON(res, 500, { error: `安装后 manifest 验证失败` });
             return;
           }
 
           const dist = analyzeDistribution(collectRelativeFilesFromDir(tempDir), installed);
           if (dist.distributionMode !== 'bundled') {
+            cleanupTempInstallDir(tempDir);
             sendJSON(res, 400, { error: `这不是可直接安装的发行包：${describeRuntimeIssues(analyzeRuntimeEntries(collectRelativeFilesFromDir(tempDir), installed).filter((a) => a.needsBuild))}` });
             return;
           }
@@ -600,8 +601,8 @@ export function createExtensionHandlers(installDir: string) {
           sendJSON(res, 404, { error: `extension 不存在: ${name}` });
           return;
         }
-        fs.rmSync(rootDir, { recursive: true, force: true });
         const manifest = readManifestFromDir(rootDir);
+        fs.rmSync(rootDir, { recursive: true, force: true });
         if (manifest && hasPluginContribution(manifest)) {
           removeLocalPluginEntry(name);
         }
