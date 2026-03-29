@@ -28,7 +28,7 @@ import {
   buildRemoteExtensionFileUrl,
   getRemoteExtensionIndexUrl as getRemoteExtensionIndexUrlShared,
   type RemoteExtensionOptions,
-} from '@iris/extension-utils';
+} from '@irises/extension-sdk/utils';
 
 const logger = createLogger('ExtensionInstaller');
 

@@ -8,7 +8,7 @@ import {
   describeRuntimeIssues,
   collectRelativeFilesFromDir,
   type RuntimeEntryGroupAnalysis,
-} from '@iris/extension-utils';
+} from '@irises/extension-sdk/utils';
 
 const logger = createLogger('ExtensionDependencies');
 

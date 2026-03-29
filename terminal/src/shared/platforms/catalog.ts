@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { resolveRuntimeDataDir } from "../runtime-paths.js"
-import { normalizeText as normalizeTextShared } from "@iris/extension-utils"
+import { normalizeText as normalizeTextShared } from "@irises/extension-sdk/utils"
 
 export type PlatformPanelFieldType = "string" | "password" | "number"
 

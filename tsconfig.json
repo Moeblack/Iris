@@ -16,7 +16,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "paths": {
-      "@iris/extension-utils": ["./packages/extension-utils/src"]
+      "@irises/extension-sdk/utils": ["./packages/extension-sdk/src/utils"]
     }
   },
   "include": ["src/**/*"],

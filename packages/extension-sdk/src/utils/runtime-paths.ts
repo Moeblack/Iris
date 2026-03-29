@@ -1,7 +1,7 @@
 /**
  * 数据目录解析
  *
- * 归集 core paths.ts / terminal runtime-paths.ts / extension-sdk runtime-paths.ts
+ * 归集 core paths.ts / terminal runtime-paths.ts
  * 中重复的数据目录解析逻辑。
  */
 

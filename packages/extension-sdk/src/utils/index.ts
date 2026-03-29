@@ -1,7 +1,7 @@
 /**
- * @iris/extension-utils
+ * @irises/extension-sdk/utils
  *
- * Iris extension 系统的内部共享工具包。
+ * Iris extension 系统的内部共享工具。
  * 供 core (src/extension/) 和 terminal (terminal/src/) 共享使用，
  * 避免重复实现。
  *

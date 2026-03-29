@@ -1,20 +1,20 @@
 /**
  * Extension 通用工具
  *
- * 从 @iris/extension-utils re-export 共享工具，
+ * 从 @irises/extension-sdk/utils re-export 共享工具，
  * 同时提供 core 专属的严格类型版本。
  */
 
 import { createLogger } from '../logger';
 import type { ExtensionManifest } from './types';
 
-// 从共享包 re-export 基础工具
-export { MANIFEST_FILE } from '@iris/extension-utils';
-export { isDirectory, resolveSafeRelativePath } from '@iris/extension-utils';
+// 从 SDK 共享工具 re-export 基础工具
+export { MANIFEST_FILE } from '@irises/extension-sdk/utils';
+export { isDirectory, resolveSafeRelativePath } from '@irises/extension-sdk/utils';
 import {
   parseExtensionManifest as parseExtensionManifestLike,
   readManifestFromDir as readManifestFromDirLike,
-} from '@iris/extension-utils';
+} from '@irises/extension-sdk/utils';
 
 const logger = createLogger('ExtensionUtils');
 

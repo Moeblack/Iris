@@ -4,7 +4,7 @@ import path from 'path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@iris/extension-utils': path.resolve(__dirname, 'packages/extension-utils/src'),
+      '@irises/extension-sdk/utils': path.resolve(__dirname, 'packages/extension-sdk/src/utils'),
     },
   },
   test: {

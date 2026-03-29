@@ -39,6 +39,7 @@ npm install @irises/extension-sdk
 - `createExtensionLogger`
 - `definePlatformFactory`
 - `pairing` 公共模块
+- `utils` 内部共享工具（路径处理、manifest 解析、FS 工具、远程仓库操作、运行时入口分析）
 
 ### 插件 API
 
@@ -75,6 +76,12 @@ import {
 } from '@irises/extension-sdk/plugin';
 
 import { PairingGuard, PairingStore, type PairingConfig } from '@irises/extension-sdk/pairing';
+```
+
+内部共享工具（core / terminal 使用）：
+
+```ts
+import { normalizeText, readManifestFromDir, fetchRemoteIndex } from '@irises/extension-sdk/utils';
 ```
 
 ## 依赖边界
