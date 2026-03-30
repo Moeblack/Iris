@@ -1,9 +1,0 @@
-{
-  "extends": "../../../tsconfig.json",
-  "compilerOptions": {
-    "jsxImportSource": "@opentui/react",
-    "rootDir": "../../.."
-  },
-  "include": ["**/*"],
-  "exclude": ["node_modules"]
-}

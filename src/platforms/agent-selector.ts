@@ -8,7 +8,7 @@
  * 直接用 ANSI 输出 + readline 实现更轻量。
  */
 
-import type { AgentDefinition } from '../../agents';
+import type { AgentDefinition } from '../agents';
 
 /** 全局 AI 模式的特殊 agent name */
 export const GLOBAL_AGENT_NAME = '__global__';

@@ -309,7 +309,7 @@ async function runConsoleAgentLoop(
 
   while (true) {
     // 显示 Agent 选择界面
-    const { showAgentSelector, GLOBAL_AGENT_NAME } = await import('./platforms/console/agent-selector');
+    const { showAgentSelector, GLOBAL_AGENT_NAME } = await import('./platforms/agent-selector');
     const selected = await showAgentSelector(agentDefs);
     if (!selected) break; // Esc / Ctrl+C → 退出
 
