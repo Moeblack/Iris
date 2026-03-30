@@ -114,7 +114,7 @@ export class PluginManager {
           prepared.pluginConfig,
           this._configDir,
         );
-        await prepared.plugin.preBootstrap(context);
+        await prepared.plugin.preBootstrap(context as any);
         logger.info(`插件 "${prepared.plugin.name}@${prepared.plugin.version}" 已完成 preBootstrap`);
       } catch (err) {
         logger.error(`插件 "${prepared.entry.name}" preBootstrap 执行失败:`, err);

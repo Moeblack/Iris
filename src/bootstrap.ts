@@ -304,7 +304,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
   // 构建完整内部 API（供插件和平台扩展使用）
   const getMCPManagerFn = () => mcpManager;
   const setMCPManagerFn = (m?: MCPManager) => { mcpManager = m; };
-  const irisAPI: IrisAPI = {
+  const irisAPI = {
     backend,
     router,
     storage,
@@ -345,7 +345,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     patchPrototype,
     registerWebRoute: registerDeferredWebRoute,
     registerWebPanel,
-  };
+  } satisfies Record<string, unknown> as unknown as IrisAPI;
 
   if (pluginManager && pluginManager.size > 0) {
     backend.setPluginHooks(pluginManager.getHooks());

@@ -11,7 +11,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYAML } from 'yaml';
 
-export class PreBootstrapContextImpl implements PreBootstrapContext {
+/** @internal 结构上满足 SDK PreBootstrapContext，通过 as 断言使用 */
+export class PreBootstrapContextImpl {
   constructor(
     private pluginName: string,
     private appConfig: AppConfig,

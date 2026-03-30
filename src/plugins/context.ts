@@ -19,7 +19,7 @@ import type { PluginContext, PluginHook, PluginLogger, ToolWrapper, IrisAPI } fr
 import { createLogger } from '../logger';
 import type { PlatformAdapter } from '@irises/extension-sdk';
 
-export class PluginContextImpl implements PluginContext {
+export class PluginContextImpl {
   private hooks: PluginHook[] = [];
   private readyCallbacks: Array<(api: IrisAPI) => void | Promise<void>> = [];
   private _platformReadyCallbacks: Array<(platforms: ReadonlyMap<string, PlatformAdapter>, api: IrisAPI) => void | Promise<void>> = [];
