@@ -4,6 +4,7 @@ import type { Content, Part } from './message.js';
 import type { ModeDefinition } from './mode.js';
 import type { IrisBackendLike, IrisPlatformFactoryContextLike, PlatformAdapter } from './platform.js';
 import type { ToolDefinition, ToolHandler } from './tool.js';
+import type { MediaServiceLike, OCRProviderLike } from './media.js';
 
 export type PatchDisposer = () => void;
 export type PatchMethod = (...args: any[]) => PatchDisposer;
@@ -75,7 +76,10 @@ export interface IrisAPI {
   prompt: PromptAssemblerLike;
   config: Readonly<Record<string, unknown>>;
   mcpManager?: MCPManagerLike;
-  ocrService?: unknown;
+  /** OCR 服务（当主模型不支持 vision 时回退使用）。未配置 OCR 时为 undefined。 */
+  ocrService?: OCRProviderLike;
+  /** 媒体处理服务：图片缩放、文档提取、Office→PDF 转换 */
+  media?: MediaServiceLike;
   extensions: BootstrapExtensionRegistryLike;
   pluginManager: PluginManagerLike;
   eventBus: PluginEventBusLike;

@@ -39,6 +39,14 @@ export type {
 } from './platform.js';
 
 export type {
+  ExtractedDocument,
+  ImageResizeOptions,
+  MediaServiceLike,
+  OCRProviderLike,
+  ResizedImage,
+} from './media.js';
+
+export type {
   Content,
   FunctionCallPart,
   FunctionResponsePart,

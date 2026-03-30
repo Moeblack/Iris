@@ -286,6 +286,18 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
   const setMCPManagerFn = (m?: MCPManager) => { mcpManager = m; };
   const irisAPI = {
     backend,
+    media: (() => {
+      let _media: any;
+      const load = () => {
+        if (_media) return _media;
+        const { resizeImage, formatDimensionNote } = require('./media/image-resize');
+        const { extractDocument, isSupportedDocumentMime } = require('./media/document-extract');
+        const { convertToPDF, isConversionAvailable } = require('./media/office-to-pdf');
+        _media = { resizeImage, formatDimensionNote, extractDocument, isSupportedDocumentMime, convertToPDF, isConversionAvailable };
+        return _media;
+      };
+      return new Proxy({} as any, { get: (_t, p) => (load() as any)[p] });
+    })(),
     router,
     storage,
     tools,
