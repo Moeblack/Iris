@@ -20,6 +20,7 @@ export const ICONS = {
     compress: 'compress',
     schedule: 'schedule',
     dragHandle: 'drag_indicator',
+    edit: 'edit',
   },
   sidebar: {
     chat: 'chat',

@@ -68,6 +68,7 @@
         @remove="handleQueueRemove"
         @clear="handleQueueClear"
         @reorder="handleQueueReorder"
+        @edit="handleQueueEdit"
       />
       <ChatInput
         :disabled="sending"
@@ -102,7 +103,7 @@ const { currentSessionId } = useSessions()
 const { messages, messagesLoading, messagesError, messageActionError, sending, streamingText, isStreaming, streamingThought, streamingThoughtDurationMs, armedDeleteMessageIndex, deletingMessageIndex, retryInfo, clearMessageActionError, currentSessionSending, sendMessage, retryLastMessage, deleteMessage, reloadMessages, undoLastMessage, redoLastMessage } = useChat()
 const { totalTokenCount, contextWindow, usageLabel, usagePercent, setContextWindow } = useContextUsage()
 const { isSlashCommand, executeCommand } = useSlashCommands()
-const { queue, enqueue, remove: queueRemove, clear: queueClear, reorder: queueReorder, size: queueSize } = useMessageQueue()
+const { queue, enqueue, remove: queueRemove, clear: queueClear, reorder: queueReorder, update: queueUpdate, size: queueSize } = useMessageQueue()
 
 // ---- 模型选择器 ----
 const currentModelName = ref<string | null>(null)
@@ -183,6 +184,10 @@ function handleQueueClear() {
 
 function handleQueueReorder(fromIndex: number, toIndex: number) {
   queueReorder(fromIndex, toIndex)
+}
+
+function handleQueueEdit(id: string, newText: string) {
+  queueUpdate(id, newText)
 }
 
 // ---- 上下文压缩 ----

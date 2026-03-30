@@ -65,8 +65,18 @@ export function useMessageQueue() {
     queue.value = list
   }
 
+  /** 更新指定消息的文本 */
+  function update(id: string, newText: string): boolean {
+    const idx = queue.value.findIndex(m => m.id === id)
+    if (idx === -1) return false
+    const list = [...queue.value]
+    list[idx] = { ...list[idx], text: newText }
+    queue.value = list
+    return true
+  }
+
   /** 队列长度（computed） */
   const size = computed(() => queue.value.length)
 
-  return { queue, enqueue, dequeue, remove, clear, reorder, size }
+  return { queue, enqueue, dequeue, remove, clear, reorder, update, size }
 }

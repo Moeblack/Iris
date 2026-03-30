@@ -20,7 +20,7 @@
             'drag-over-below': dropTarget === index && dropEdge === 'below',
             'dragging': dragIndex === index,
           }"
-          draggable="true"
+          :draggable="editingId !== msg.id"
           @dragstart="onDragStart(index, $event)"
           @dragend="onDragEnd"
           @dragover.prevent="onDragOver(index, $event)"
@@ -31,15 +31,57 @@
             <AppIcon :name="ICONS.common.dragHandle" />
           </span>
           <span class="queue-bar-item-index">{{ index + 1 }}</span>
-          <span class="queue-bar-item-text">{{ truncate(msg.text, 72) }}</span>
-          <button
-            class="queue-bar-item-remove"
-            type="button"
-            title="移除此消息"
-            @click="$emit('remove', msg.id)"
-          >
-            <AppIcon :name="ICONS.common.close" />
-          </button>
+
+          <!-- 编辑模式 -->
+          <input
+            v-if="editingId === msg.id"
+            ref="editInputRef"
+            v-model="editText"
+            class="queue-bar-item-input"
+            @keydown.enter.prevent="confirmEdit(msg.id)"
+            @keydown.escape.prevent="cancelEdit"
+          />
+          <!-- 普通显示 -->
+          <span v-else class="queue-bar-item-text" @dblclick="startEdit(msg)">{{ truncate(msg.text, 72) }}</span>
+
+          <!-- 编辑中: 确认/取消按钮 -->
+          <template v-if="editingId === msg.id">
+            <button
+              class="queue-bar-item-edit confirm"
+              type="button"
+              title="确认"
+              @click="confirmEdit(msg.id)"
+            >
+              <AppIcon :name="ICONS.status.ok" />
+            </button>
+            <button
+              class="queue-bar-item-edit cancel"
+              type="button"
+              title="取消"
+              @click="cancelEdit"
+            >
+              <AppIcon :name="ICONS.common.close" />
+            </button>
+          </template>
+          <!-- 非编辑: 编辑/删除按钮 -->
+          <template v-else>
+            <button
+              class="queue-bar-item-edit"
+              type="button"
+              title="编辑此消息"
+              @click="startEdit(msg)"
+            >
+              <AppIcon :name="ICONS.common.edit" />
+            </button>
+            <button
+              class="queue-bar-item-remove"
+              type="button"
+              title="移除此消息"
+              @click="$emit('remove', msg.id)"
+            >
+              <AppIcon :name="ICONS.common.close" />
+            </button>
+          </template>
         </div>
       </div>
     </div>
@@ -47,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import type { QueuedMessage } from '../composables/useMessageQueue'
 import AppIcon from './AppIcon.vue'
 import { ICONS } from '../constants/icons'
@@ -57,7 +99,15 @@ const emit = defineEmits<{
   remove: [id: string]
   clear: []
   reorder: [fromIndex: number, toIndex: number]
+  edit: [id: string, newText: string]
 }>()
+
+/** 正在编辑的消息 ID */
+const editingId = ref<string | null>(null)
+/** 编辑中的文本 */
+const editText = ref('')
+/** 编辑输入框 ref */
+const editInputRef = ref<HTMLInputElement | null>(null)
 
 /** 正在拖拽的原始索引 */
 const dragIndex = ref<number | null>(null)
@@ -66,7 +116,33 @@ const dropTarget = ref<number | null>(null)
 /** 悬停在目标条目的上半/下半 */
 const dropEdge = ref<'above' | 'below'>('below')
 
+function startEdit(msg: QueuedMessage) {
+  editingId.value = msg.id
+  editText.value = msg.text
+  nextTick(() => {
+    editInputRef.value?.focus()
+  })
+}
+
+function confirmEdit(id: string) {
+  const trimmed = editText.value.trim()
+  if (trimmed) {
+    emit('edit', id, trimmed)
+  }
+  editingId.value = null
+  editText.value = ''
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editText.value = ''
+}
+
 function onDragStart(index: number, event: DragEvent) {
+  if (editingId.value) {
+    event.preventDefault()
+    return
+  }
   dragIndex.value = index
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'move'
