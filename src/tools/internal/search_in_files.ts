@@ -17,22 +17,15 @@ import * as path from 'path';
 import { ToolDefinition } from '../../types';
 import { resolveProjectPath } from '../utils';
 import { getToolLimits } from '../tool-limits';
+import {
+  toPosix, globToRegExp, isLikelyBinary, decodeText, buildSearchRegex, walkFiles,
+  type TextEncoding,
+} from '@irises/extension-sdk/tool-utils';
 
-/** 默认忽略目录（仅按目录名判断） */
-const DEFAULT_IGNORED_DIRS = new Set([
-  '.git',
-  'node_modules',
-  'dist',
-  'build',
-  '.next',
-  '.turbo',
-  '.limcode',
-]);
+export { toPosix, globToRegExp, isLikelyBinary, decodeText, buildSearchRegex, walkFiles, DEFAULT_IGNORED_DIRS } from '@irises/extension-sdk/tool-utils';
+export type { TextEncoding, DetectedText } from '@irises/extension-sdk/tool-utils';
 
 const DEFAULT_PATTERN = '**/*';
-
-/** 采样字节数，用于二进制检测 */
-const BINARY_DETECT_BYTES = 8 * 1024;
 
 interface SearchMatch {
   file: string;
@@ -52,24 +45,6 @@ interface ReplaceFileResult {
 
 type ToolMode = 'search' | 'replace';
 
-export type TextEncoding = 'utf-8' | 'utf-16le' | 'utf-16be';
-
-export interface DetectedText {
-  text: string;
-  encoding: TextEncoding;
-  hasBom: boolean;
-  /** 原始是否包含 CRLF（用于更稳定的回写策略） */
-  hasCRLF: boolean;
-}
-
-export function toPosix(p: string): string {
-  return p.split(path.sep).join('/');
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && Number.isInteger(value);
 }
@@ -77,77 +52,6 @@ function isNonNegativeInteger(value: unknown): value is number {
 function clampPositiveInteger(value: unknown, fallback: number): number {
   if (!isNonNegativeInteger(value)) return fallback;
   return value === 0 ? fallback : value;
-}
-
-export function globToRegExp(glob: string): RegExp {
-  // 基础 glob：
-  // - *  匹配除 / 外任意长度字符
-  // - ?  匹配除 / 外单个字符
-  // - ** 匹配任意长度字符（包含 /）
-  const g = toPosix(glob.trim());
-  let re = '^';
-
-  for (let i = 0; i < g.length; i++) {
-    const ch = g[i];
-
-    if (ch === '*') {
-      const next = g[i + 1];
-      if (next === '*') {
-        // **
-        i++;
-        // **/ 这种写法比较常见，做一个更宽松的处理
-        if (g[i + 1] === '/') {
-          i++;
-          re += '(?:.*\\/)?';
-        } else {
-          re += '.*';
-        }
-      } else {
-        re += '[^/]*';
-      }
-      continue;
-    }
-
-    if (ch === '?') {
-      re += '[^/]';
-      continue;
-    }
-
-    // 普通字符：转义正则特殊字符
-    if ('\\.^$+()[]{}|'.includes(ch)) {
-      re += '\\' + ch;
-    } else {
-      re += ch;
-    }
-  }
-
-  re += '$';
-  return new RegExp(re);
-}
-
-function shouldIgnoreByPath(relativePosixPath: string): boolean {
-  const parts = relativePosixPath.split('/');
-  return parts.some(p => DEFAULT_IGNORED_DIRS.has(p));
-}
-
-export function isLikelyBinary(buf: Buffer): boolean {
-  const n = Math.min(buf.length, BINARY_DETECT_BYTES);
-  if (n === 0) return false;
-
-  let suspicious = 0;
-  for (let i = 0; i < n; i++) {
-    const b = buf[i];
-
-    // NUL 基本可判为二进制
-    if (b === 0x00) return true;
-
-    const isAllowedWhitespace = b === 0x09 || b === 0x0A || b === 0x0D; // \t \n \r
-    const isControl = (b < 0x20 && !isAllowedWhitespace) || b === 0x7F;
-    if (isControl) suspicious++;
-  }
-
-  const ratio = suspicious / n;
-  return ratio > 0.3;
 }
 
 function swapByteOrder16(buf: Buffer): Buffer {
@@ -158,49 +62,6 @@ function swapByteOrder16(buf: Buffer): Buffer {
     out[i + 1] = buf[i];
   }
   return out;
-}
-
-export function decodeText(buf: Buffer): DetectedText {
-  const hasCRLF = buf.includes(Buffer.from('\r\n'));
-
-  // UTF-8 BOM
-  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
-    return {
-      text: buf.subarray(3).toString('utf8'),
-      encoding: 'utf-8',
-      hasBom: true,
-      hasCRLF,
-    };
-  }
-
-  // UTF-16 LE BOM
-  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
-    return {
-      text: buf.subarray(2).toString('utf16le'),
-      encoding: 'utf-16le',
-      hasBom: true,
-      hasCRLF,
-    };
-  }
-
-  // UTF-16 BE BOM
-  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
-    const swapped = swapByteOrder16(buf.subarray(2));
-    return {
-      text: swapped.toString('utf16le'),
-      encoding: 'utf-16be',
-      hasBom: true,
-      hasCRLF,
-    };
-  }
-
-  // 默认按 UTF-8
-  return {
-    text: buf.toString('utf8'),
-    encoding: 'utf-8',
-    hasBom: false,
-    hasCRLF,
-  };
 }
 
 function encodeText(text: string, encoding: TextEncoding, hasBom: boolean, preferCRLF: boolean): Buffer {
@@ -220,13 +81,6 @@ function encodeText(text: string, encoding: TextEncoding, hasBom: boolean, prefe
   // utf-8
   const body = Buffer.from(normalized, 'utf8');
   return hasBom ? Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), body]) : body;
-}
-
-export function buildSearchRegex(query: string, isRegex: boolean): RegExp {
-  if (!query || !query.trim()) {
-    throw new Error('query 不能为空');
-  }
-  return isRegex ? new RegExp(query, 'g') : new RegExp(escapeRegex(query), 'g');
 }
 
 function computeLineStarts(text: string): number[] {
@@ -273,36 +127,6 @@ function buildContext(lines: string[], lineNumber1Based: number, contextLines: n
     out.push(`${ln}: ${truncateLine(lines[ln - 1] ?? '', maxLineChars)}`);
   }
   return out.join('\n');
-}
-
-export function walkFiles(
-  rootAbs: string,
-  onFile: (fileAbs: string, relPosix: string) => void,
-  shouldStop: () => boolean,
-  relPosixDir: string = '',
-): void {
-  if (shouldStop()) return;
-
-  const dirAbs = relPosixDir ? path.join(rootAbs, relPosixDir) : rootAbs;
-  const entries = fs.readdirSync(dirAbs, { withFileTypes: true });
-
-  for (const ent of entries) {
-    if (shouldStop()) return;
-
-    const relPosix = relPosixDir ? `${relPosixDir}/${ent.name}` : ent.name;
-
-    if (ent.isDirectory()) {
-      if (DEFAULT_IGNORED_DIRS.has(ent.name)) continue;
-      if (shouldIgnoreByPath(relPosix)) continue;
-      walkFiles(rootAbs, onFile, shouldStop, relPosix);
-      continue;
-    }
-
-    if (ent.isFile()) {
-      if (shouldIgnoreByPath(relPosix)) continue;
-      onFile(path.join(dirAbs, ent.name), relPosix);
-    }
-  }
 }
 
 export const searchInFiles: ToolDefinition = {

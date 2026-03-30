@@ -6,13 +6,11 @@
 
 import * as fs from 'fs';
 import { ToolDefinition } from '../../types';
-import { normalizeObjectArrayArg, resolveProjectPath } from '../utils';
+import { resolveProjectPath } from '../utils';
+import { normalizeDeleteCodeArgs } from '@irises/extension-sdk/tool-utils';
 
-export interface DeleteCodeEntry {
-  path: string;
-  start_line: number;
-  end_line: number;
-}
+export { normalizeDeleteCodeArgs } from '@irises/extension-sdk/tool-utils';
+export type { DeleteCodeEntry } from '@irises/extension-sdk/tool-utils';
 
 interface DeleteCodeResult {
   path: string;
@@ -21,23 +19,6 @@ interface DeleteCodeResult {
   end_line?: number;
   deletedLines?: number;
   error?: string;
-}
-
-function isDeleteCodeEntry(value: unknown): value is DeleteCodeEntry {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && typeof (value as Record<string, unknown>).path === 'string'
-    && typeof (value as Record<string, unknown>).start_line === 'number'
-    && typeof (value as Record<string, unknown>).end_line === 'number';
-}
-
-export function normalizeDeleteCodeArgs(args: Record<string, unknown>): DeleteCodeEntry[] | undefined {
-  return normalizeObjectArrayArg(args, {
-    arrayKey: 'files',
-    singularKeys: ['file'],
-    isEntry: isDeleteCodeEntry,
-  });
 }
 
 export const deleteCode: ToolDefinition = {
@@ -68,11 +49,7 @@ export const deleteCode: ToolDefinition = {
     },
   },
   handler: async (args) => {
-    const fileList = normalizeObjectArrayArg(args, {
-      arrayKey: 'files',
-      singularKeys: ['file'],
-      isEntry: isDeleteCodeEntry,
-    });
+    const fileList = normalizeDeleteCodeArgs(args);
 
     if (!fileList || fileList.length === 0) {
       throw new Error('files 参数必须是非空数组');

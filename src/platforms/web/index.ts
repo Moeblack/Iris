@@ -10,7 +10,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { PlatformAdapter } from '../base';
+import { PlatformAdapter } from '@irises/extension-sdk';
 import { createCloudflareHandlers } from './handlers/cloudflare';
 import { createDeployHandlers } from './handlers/deploy';
 import { Backend } from '../../core/backend';

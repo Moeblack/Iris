@@ -390,7 +390,6 @@ export class ConsolePlatform extends PlatformAdapter {
         modelName: this.modelName,
         contextWindow: this.contextWindow,
         initWarnings: this.initWarnings,
-        toolPreviewUtils: this.api?.toolPreviewUtils,
       });
 
       createRoot(this.renderer).render(element);

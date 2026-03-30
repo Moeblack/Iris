@@ -12,7 +12,7 @@ import type { PatchDisposer } from './patch';
 import type { PluginEventBus } from './event-bus';
 import type { PluginManager } from './manager';
 import type { ToolRegistry } from '../tools/registry';
-import type { PlatformAdapter } from '../platforms/base';
+import type { PlatformAdapter } from '@irises/extension-sdk';
 import type { ModeRegistry } from '../modes/registry';
 import type { PromptAssembler } from '../prompt/assembler';
 import type { StorageProvider } from '../storage/base';
@@ -118,6 +118,17 @@ export interface IrisAPI {
   registerWebRoute?: (method: string, path: string, handler: (req: any, res: any, params: Record<string, string>) => Promise<void>) => void;
   /** 向 Web 平台注册扩展面板页面。宿主侧边栏会动态展示已注册的面板。 */
   registerWebPanel?: (panel: WebPanelDefinition) => void;
+
+  // ---- 宿主级通用能力（所有扩展可用）----
+
+  /** 配置管理器 */
+  configManager?: Record<string, unknown>;
+  /** 是否编译后的二进制发行版 */
+  isCompiledBinary?: boolean;
+  /** 设置全局日志级别 */
+  setLogLevel?(level: number): void;
+  /** 获取全局日志级别 */
+  getLogLevel?(): number;
 }
 
 /** 扩展面板定义（由插件通过 registerWebPanel 注册，宿主 Web UI 动态渲染） */

@@ -9,7 +9,7 @@ import type { Backend } from '../core/backend';
 import type { LLMRouter } from '../llm/router';
 import type { MCPManager } from '../mcp';
 import type { BootstrapExtensionRegistry } from '../bootstrap/extensions';
-import { PlatformAdapter } from './base';
+import { PlatformAdapter } from '@irises/extension-sdk';
 import type { PluginEventBus } from '../plugins/event-bus';
 
 export interface PlatformFactoryContext {

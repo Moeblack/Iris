@@ -47,6 +47,13 @@ import { PluginEventBus } from './plugins/event-bus';
 import { patchMethod, patchPrototype } from './plugins/patch';
 import { registerExtensionPlatforms } from './extension';
 import type { IrisAPI, InlinePluginEntry, WebPanelDefinition } from './plugins/types';
+import { readEditableConfig, updateEditableConfig } from './config/manage';
+import { applyRuntimeConfigReload, type RuntimeConfigReloadContext } from './config/runtime';
+import { DEFAULTS, parseLLMConfig } from './config/llm';
+import { parseSystemConfig } from './config/system';
+import { parseToolsConfig } from './config/tools';
+import { setGlobalLogLevel, getGlobalLogLevel, LogLevel } from './logger';
+import { isCompiledBinary } from './paths';
 
 export interface BootstrapResult {
   backend: Backend;
@@ -72,6 +79,8 @@ export interface BootstrapResult {
   eventBus: PluginEventBus;
   /** 绑定 Web 路由注册到 IrisAPI（在 WebPlatform 创建后调用） */
   bindWebRouteRegistration: (register: (method: string, path: string, handler: any) => void) => void;
+  /** 完整 IrisAPI（供平台 factory context 注入） */
+  irisAPI?: Record<string, unknown>;
 }
 
 /** Bootstrap 选项（多 Agent 模式传入） */
@@ -291,29 +300,55 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     res.end(JSON.stringify(webPanels));
   });
 
+
+  // 构建完整内部 API（供插件和平台扩展使用）
+  const getMCPManagerFn = () => mcpManager;
+  const setMCPManagerFn = (m?: MCPManager) => { mcpManager = m; };
+  const irisAPI: IrisAPI = {
+    backend,
+    router,
+    storage,
+    memory,
+    tools,
+    modes: modeRegistry,
+    prompt,
+    config,
+    mcpManager,
+    ocrService,
+    extensions,
+    configManager: {
+      getConfigDir: () => configDir,
+      readEditableConfig: () => readEditableConfig(configDir),
+      updateEditableConfig: (updates: Record<string, unknown>) => updateEditableConfig(configDir, updates),
+      applyRuntimeConfigReload: async (mergedConfig: Record<string, unknown>) => {
+        try {
+          const ctx: RuntimeConfigReloadContext = {
+            backend, getMCPManager: getMCPManagerFn, setMCPManager: setMCPManagerFn, extensions,
+          };
+          await applyRuntimeConfigReload(ctx, mergedConfig);
+          return { success: true };
+        } catch (e) {
+          return { success: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
+      getLLMDefaults: () => DEFAULTS as Record<string, Record<string, unknown>>,
+      parseLLMConfig: (raw?: Record<string, unknown>) => parseLLMConfig(raw as any) as unknown as Record<string, unknown>,
+      parseSystemConfig: (raw?: Record<string, unknown>) => parseSystemConfig(raw as any) as unknown as Record<string, unknown>,
+      parseToolsConfig: (raw?: Record<string, unknown>) => parseToolsConfig(raw as any) as unknown as Record<string, unknown>,
+    },
+    isCompiledBinary,
+    setLogLevel: (level: number) => setGlobalLogLevel(level as LogLevel),
+    getLogLevel: () => getGlobalLogLevel() as number,
+    pluginManager: pluginManager!,
+    eventBus,
+    patchMethod,
+    patchPrototype,
+    registerWebRoute: registerDeferredWebRoute,
+    registerWebPanel,
+  };
+
   if (pluginManager && pluginManager.size > 0) {
     backend.setPluginHooks(pluginManager.getHooks());
-
-    // 通知插件系统初始化完成，传递完整内部 API
-    const irisAPI: IrisAPI = {
-      backend,
-      router,
-      storage,
-      memory,
-      tools,
-      modes: modeRegistry,
-      prompt,
-      config,
-      mcpManager,
-      ocrService,
-      extensions,
-      pluginManager,
-      eventBus,
-      patchMethod,
-      patchPrototype,
-      registerWebRoute: registerDeferredWebRoute,
-      registerWebPanel,
-    };
     await pluginManager.notifyReady(irisAPI);
   }
 
@@ -333,5 +368,6 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     platformRegistry: extensions.platforms,
     eventBus,
     bindWebRouteRegistration,
+    irisAPI: irisAPI as unknown as Record<string, unknown>,
   };
 }

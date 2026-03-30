@@ -28,6 +28,11 @@
       "import": "./dist/plugin.js",
       "default": "./dist/plugin.js"
     },
+    "./tool-utils": {
+      "types": "./dist/tool-utils.d.ts",
+      "import": "./dist/tool-utils.js",
+      "default": "./dist/tool-utils.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

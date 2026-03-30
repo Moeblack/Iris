@@ -9,7 +9,27 @@
 import React, { useMemo } from 'react';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ToolInvocation, ToolPreviewUtilsLike, UnifiedDiffHunkLike, UnifiedDiffLineLike, WriteEntryLike, InsertEntryLike, DeleteCodeEntryLike } from '@irises/extension-sdk';
+import type { ToolInvocation } from '@irises/extension-sdk';
+import {
+  parseUnifiedDiff,
+  normalizeWriteArgs,
+  normalizeInsertArgs,
+  normalizeDeleteCodeArgs,
+  resolveProjectPath,
+  walkFiles,
+  buildSearchRegex,
+  decodeText,
+  globToRegExp,
+  isLikelyBinary,
+  toPosix,
+} from '@irises/extension-sdk/tool-utils';
+import type {
+  UnifiedDiffHunk as UnifiedDiffHunkLike,
+  UnifiedDiffLine as UnifiedDiffLineLike,
+  WriteEntry as WriteEntryLike,
+  InsertEntry as InsertEntryLike,
+  DeleteCodeEntry as DeleteCodeEntryLike,
+} from '@irises/extension-sdk/tool-utils';
 import { C } from '../theme';
 
 // ============ 类型 ============
@@ -22,7 +42,6 @@ interface DiffApprovalViewProps {
   showLineNumbers: boolean;
   wrapMode: 'none' | 'word';
   previewIndex?: number;
-  toolPreviewUtils: ToolPreviewUtilsLike;
 }
 
 interface DiffPreviewItem {
@@ -84,11 +103,11 @@ function toDiffLinePrefix(type: 'context' | 'add' | 'del'): string {
   return ' ';
 }
 
-function buildDisplayDiff(filePath: string, patch: string, utils: ToolPreviewUtilsLike): string {
+function buildDisplayDiff(filePath: string, patch: string): string {
   const cleaned = sanitizePatchText(patch);
   if (!cleaned) return '';
   try {
-    const parsed = utils.parseUnifiedDiff(cleaned);
+    const parsed = parseUnifiedDiff(cleaned);
     const fallbackOld = `a/${filePath || 'file'}`;
     const fallbackNew = `b/${filePath || 'file'}`;
     const body = parsed.hunks
@@ -163,10 +182,10 @@ function createMsg(id: string, filePath: string, label: string, message: string)
 
 // ============ apply_diff 预览 ============
 
-function buildApplyDiffPreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike): DiffApprovalPreview {
+function buildApplyDiffPreview(inv: ToolInvocation): DiffApprovalPreview {
   const filePath = typeof inv.args.path === 'string' ? inv.args.path : '';
   const rawPatch = getSafePatch(inv.args.patch);
-  const displayDiff = buildDisplayDiff(filePath, rawPatch, utils);
+  const displayDiff = buildDisplayDiff(filePath, rawPatch);
   return {
     title: 'Diff 审批', toolLabel: 'apply_diff',
     summary: [filePath ? `目标文件：${filePath}` : '目标文件：未提供'],
@@ -178,8 +197,8 @@ function buildApplyDiffPreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike)
 
 // ============ write_file 预览 ============
 
-function buildWriteFilePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike): DiffApprovalPreview {
-  const fileList = utils.normalizeWriteArgs(inv.args);
+function buildWriteFilePreview(inv: ToolInvocation): DiffApprovalPreview {
+  const fileList = normalizeWriteArgs(inv.args);
   if (!fileList || fileList.length === 0) {
     return {
       title: 'Diff 审批', toolLabel: 'write_file',
@@ -191,7 +210,7 @@ function buildWriteFilePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike)
   let created = 0, modified = 0, unchanged = 0, errored = 0;
   fileList.forEach((entry: WriteEntryLike, i: number) => {
     try {
-      const resolved = utils.resolveProjectPath(entry.path);
+      const resolved = resolveProjectPath(entry.path);
       let existed = false, before = '';
       if (fs.existsSync(resolved)) { before = fs.readFileSync(resolved, 'utf-8'); existed = true; }
       if (existed && before === entry.content) { unchanged++; return; }
@@ -214,8 +233,8 @@ function buildWriteFilePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike)
 
 // ============ insert_code 预览 ============
 
-function buildInsertCodePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike): DiffApprovalPreview {
-  const fileList = utils.normalizeInsertArgs(inv.args);
+function buildInsertCodePreview(inv: ToolInvocation): DiffApprovalPreview {
+  const fileList = normalizeInsertArgs(inv.args);
   if (!fileList || fileList.length === 0) {
     return {
       title: 'Diff 审批', toolLabel: 'insert_code',
@@ -227,7 +246,7 @@ function buildInsertCodePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike
   let successCount = 0, errored = 0;
   fileList.forEach((entry: InsertEntryLike, i: number) => {
     try {
-      const resolved = utils.resolveProjectPath(entry.path);
+      const resolved = resolveProjectPath(entry.path);
       const before = fs.readFileSync(resolved, 'utf-8');
       const lines = before.split('\n');
       const insertLines = entry.content.split('\n');
@@ -251,8 +270,8 @@ function buildInsertCodePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike
 
 // ============ delete_code 预览 ============
 
-function buildDeleteCodePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike): DiffApprovalPreview {
-  const fileList = utils.normalizeDeleteCodeArgs(inv.args);
+function buildDeleteCodePreview(inv: ToolInvocation): DiffApprovalPreview {
+  const fileList = normalizeDeleteCodeArgs(inv.args);
   if (!fileList || fileList.length === 0) {
     return {
       title: 'Diff 审批', toolLabel: 'delete_code',
@@ -264,7 +283,7 @@ function buildDeleteCodePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike
   let successCount = 0, errored = 0;
   fileList.forEach((entry: DeleteCodeEntryLike, i: number) => {
     try {
-      const resolved = utils.resolveProjectPath(entry.path);
+      const resolved = resolveProjectPath(entry.path);
       const before = fs.readFileSync(resolved, 'utf-8');
       const lines = before.split('\n');
       const after = [...lines.slice(0, entry.start_line - 1), ...lines.slice(entry.end_line)].join('\n');
@@ -287,7 +306,7 @@ function buildDeleteCodePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike
 
 // ============ search_in_files.replace 预览 ============
 
-function buildSearchReplacePreview(inv: ToolInvocation, utils: ToolPreviewUtilsLike): DiffApprovalPreview {
+function buildSearchReplacePreview(inv: ToolInvocation): DiffApprovalPreview {
   const inputPath = typeof inv.args.path === 'string' ? inv.args.path : '.';
   const pattern = typeof inv.args.pattern === 'string' ? inv.args.pattern : DEFAULT_SEARCH_PATTERN;
   const isRegex = inv.args.isRegex === true;
@@ -305,10 +324,10 @@ function buildSearchReplacePreview(inv: ToolInvocation, utils: ToolPreviewUtilsL
   }
 
   try {
-    const regex = utils.buildSearchRegex(query, isRegex);
-    const rootAbs = utils.resolveProjectPath(inputPath);
+    const regex = buildSearchRegex(query, isRegex);
+    const rootAbs = resolveProjectPath(inputPath);
     const stat = fs.statSync(rootAbs);
-    const patternRe = utils.globToRegExp(pattern);
+    const patternRe = globToRegExp(pattern);
 
     const items: DiffPreviewItem[] = [];
     let processedFiles = 0, changedFiles = 0, unchangedFiles = 0;
@@ -320,12 +339,12 @@ function buildSearchReplacePreview(inv: ToolInvocation, utils: ToolPreviewUtilsL
       if (shouldStop()) return;
       if (stat.isDirectory() && !patternRe.test(relPosix)) return;
       processedFiles++;
-      const displayPath = stat.isDirectory() ? utils.toPosix(path.join(inputPath, relPosix)) : utils.toPosix(inputPath);
+      const displayPath = stat.isDirectory() ? toPosix(path.join(inputPath, relPosix)) : toPosix(inputPath);
       const buf = fs.readFileSync(fileAbs);
       if (buf.length > maxFileSizeBytes) { skippedTooLarge++; return; }
-      if (utils.isLikelyBinary(buf)) { skippedBinary++; return; }
+      if (isLikelyBinary(buf)) { skippedBinary++; return; }
 
-      const decoded = utils.decodeText(buf);
+      const decoded = decodeText(buf);
       const countRegex = new RegExp(regex.source, regex.flags);
       let replacements = 0;
       for (;;) {
@@ -348,8 +367,8 @@ function buildSearchReplacePreview(inv: ToolInvocation, utils: ToolPreviewUtilsL
       totalReplacements += replacements;
     };
 
-    if (stat.isFile()) processFile(rootAbs, utils.toPosix(path.basename(rootAbs)));
-    else { utils.walkFiles(rootAbs, processFile, shouldStop); if (processedFiles >= maxFiles) truncated = true; }
+    if (stat.isFile()) processFile(rootAbs, toPosix(path.basename(rootAbs)));
+    else { walkFiles(rootAbs, processFile, shouldStop); if (processedFiles >= maxFiles) truncated = true; }
 
     const summary = [
       `路径 ${inputPath} · pattern ${pattern}`,
@@ -372,15 +391,15 @@ function buildSearchReplacePreview(inv: ToolInvocation, utils: ToolPreviewUtilsL
 
 // ============ 路由 ============
 
-function buildPreview(invocation: ToolInvocation, utils: ToolPreviewUtilsLike): DiffApprovalPreview {
+function buildPreview(invocation: ToolInvocation): DiffApprovalPreview {
   switch (invocation.toolName) {
-    case 'apply_diff': return buildApplyDiffPreview(invocation, utils);
-    case 'write_file': return buildWriteFilePreview(invocation, utils);
-    case 'insert_code': return buildInsertCodePreview(invocation, utils);
-    case 'delete_code': return buildDeleteCodePreview(invocation, utils);
+    case 'apply_diff': return buildApplyDiffPreview(invocation);
+    case 'write_file': return buildWriteFilePreview(invocation);
+    case 'insert_code': return buildInsertCodePreview(invocation);
+    case 'delete_code': return buildDeleteCodePreview(invocation);
     case 'search_in_files':
       if (((invocation.args.mode as string | undefined) ?? 'search') === 'replace') {
-        return buildSearchReplacePreview(invocation, utils);
+        return buildSearchReplacePreview(invocation);
       }
       break;
   }
@@ -393,8 +412,8 @@ function buildPreview(invocation: ToolInvocation, utils: ToolPreviewUtilsLike): 
 
 // ============ 组件 ============
 
-export function DiffApprovalView({ invocation, pendingCount, choice, view, showLineNumbers, wrapMode, previewIndex = 0, toolPreviewUtils }: DiffApprovalViewProps) {
-  const preview = useMemo(() => buildPreview(invocation, toolPreviewUtils), [invocation, toolPreviewUtils]);
+export function DiffApprovalView({ invocation, pendingCount, choice, view, showLineNumbers, wrapMode, previewIndex = 0 }: DiffApprovalViewProps) {
+  const preview = useMemo(() => buildPreview(invocation), [invocation]);
 
   const normalizedPreviewIndex = preview.items.length > 0
     ? ((previewIndex % preview.items.length) + preview.items.length) % preview.items.length

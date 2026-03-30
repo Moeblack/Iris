@@ -10,12 +10,12 @@
  */
 
 import { bootstrap, BootstrapResult } from './bootstrap';
-import { PlatformAdapter } from './platforms/base';
+import { PlatformAdapter } from '@irises/extension-sdk';
 import type { WebPlatform as WebPlatformType } from './platforms/web';
 import type { MCPManager } from './mcp';
 import { isMultiAgentEnabled, loadAgentDefinitions, resolveAgentPaths } from './agents';
 import type { AgentDefinition } from './agents';
-import { createConsoleHostAPIFields, isCompiledBinary } from './platforms/console-host-adapters';
+import { isCompiledBinary } from './paths';
 
 // ============ 平台创建（从原 main 中抽取） ============
 
@@ -71,9 +71,7 @@ async function createPlatforms(
       extensions: result.extensions,
       initWarnings,
       eventBus,
-      api: createConsoleHostAPIFields(configDir, getMCPManager, () => ({
-        backend, getMCPManager, setMCPManager, extensions: result.extensions
-      })),
+      api: result.irisAPI,
       isCompiledBinary,
     });
 
@@ -309,7 +307,7 @@ async function runConsoleAgentLoop(
 
   while (true) {
     // 显示 Agent 选择界面
-    const { showAgentSelector, GLOBAL_AGENT_NAME } = await import('./platforms/agent-selector');
+    const { showAgentSelector, GLOBAL_AGENT_NAME } = await import('../extensions/console/src/agent-selector');
     const selected = await showAgentSelector(agentDefs);
     if (!selected) break; // Esc / Ctrl+C → 退出
 
@@ -357,9 +355,7 @@ async function startConsoleForAgent(
     extensions: result.extensions,
     agentName,
     initWarnings,
-    api: createConsoleHostAPIFields(configDir, getMCPManager, () => ({
-      backend, getMCPManager, setMCPManager, extensions: result.extensions
-    })),
+    api: result.irisAPI,
     isCompiledBinary,
     onSwitchAgent: () => {
       resolved = true;

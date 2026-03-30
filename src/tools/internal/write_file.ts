@@ -8,51 +8,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ToolDefinition } from '../../types';
 import { resolveProjectPath } from '../utils';
+import { normalizeWriteArgs } from '@irises/extension-sdk/tool-utils';
 
-export interface WriteEntry {
-  path: string;
-  content: string;
-}
+export { normalizeWriteArgs } from '@irises/extension-sdk/tool-utils';
+export type { WriteEntry } from '@irises/extension-sdk/tool-utils';
 
 interface WriteResult {
   path: string;
   success: boolean;
   action?: 'created' | 'modified' | 'unchanged';
   error?: string;
-}
-
-function isWriteEntry(value: unknown): value is WriteEntry {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && typeof (value as Record<string, unknown>).path === 'string'
-    && typeof (value as Record<string, unknown>).content === 'string';
-}
-
-export function normalizeWriteArgs(args: Record<string, unknown>): WriteEntry[] | undefined {
-  if (Array.isArray(args.files) && args.files.length > 0) {
-    const normalized = args.files.filter(isWriteEntry);
-    return normalized.length === args.files.length
-      ? normalized
-      : undefined;
-  }
-
-  if (isWriteEntry(args.files)) {
-    return [args.files];
-  }
-
-  if (isWriteEntry(args.file)) {
-    return [args.file];
-  }
-
-  if (isWriteEntry(args)) {
-    return [{
-      path: args.path,
-      content: args.content,
-    }];
-  }
-
-  return undefined;
 }
 
 export const writeFile: ToolDefinition = {

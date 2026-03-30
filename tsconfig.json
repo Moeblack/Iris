@@ -17,7 +17,8 @@
     "noEmit": true,
     "paths": {
       "@irises/extension-sdk": ["./packages/extension-sdk/src"],
-      "@irises/extension-sdk/utils": ["./packages/extension-sdk/src/utils"]
+      "@irises/extension-sdk/utils": ["./packages/extension-sdk/src/utils"],
+      "@irises/extension-sdk/tool-utils": ["./packages/extension-sdk/src/tool-utils"]
     }
   },
   "include": ["src/**/*"],

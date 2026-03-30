@@ -17,7 +17,7 @@ import type { BootstrapExtensionRegistry } from '../bootstrap/extensions';
 import type { IrisPlugin, PluginEntry, InlinePluginEntry, PluginHook, PluginInfo, LoadedPlugin, IrisAPI } from './types';
 import { PluginContextImpl } from './context';
 import { PreBootstrapContextImpl } from './prebootstrap-context';
-import type { PlatformAdapter } from '../platforms/base';
+import type { PlatformAdapter } from '@irises/extension-sdk';
 import {
   importLocalExtensionModule,
   resolveLocalPluginSource,

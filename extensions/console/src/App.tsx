@@ -61,7 +61,6 @@ export function App({
   modelId,
   modelName,
   contextWindow,
-  toolPreviewUtils,
 }: AppProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [sessionList, setSessionList] = useState<SessionMeta[]>([]);
@@ -243,7 +242,6 @@ export function App({
         showLineNumbers={approval.showLineNumbers}
         wrapMode={approval.wrapMode}
         previewIndex={approval.previewIndex}
-        toolPreviewUtils={toolPreviewUtils!}
       />
     );
   }

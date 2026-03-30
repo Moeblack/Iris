@@ -1,4 +1,4 @@
-import type { IrisModelInfoLike as LLMModelInfo, IrisSessionMetaLike as SessionMeta, ToolPreviewUtilsLike } from '@irises/extension-sdk';
+import type { IrisModelInfoLike as LLMModelInfo, IrisSessionMetaLike as SessionMeta } from '@irises/extension-sdk';
 import type { SwitchModelResult } from './app-types';
 import type { AppHandle } from './hooks/use-app-handle';
 import type { ConsoleSettingsSaveResult, ConsoleSettingsSnapshot } from './settings';
@@ -31,5 +31,4 @@ export interface AppProps {
   modelId: string;
   modelName: string;
   contextWindow?: number;
-  toolPreviewUtils?: ToolPreviewUtilsLike;
 }

@@ -7,13 +7,11 @@
 
 import * as fs from 'fs';
 import { ToolDefinition} from '../../types';
-import { normalizeObjectArrayArg, resolveProjectPath } from '../utils';
+import { resolveProjectPath } from '../utils';
+import { normalizeInsertArgs } from '@irises/extension-sdk/tool-utils';
 
-export interface InsertEntry {
-  path: string;
-  line: number;
-  content: string;
-}
+export { normalizeInsertArgs } from '@irises/extension-sdk/tool-utils';
+export type { InsertEntry } from '@irises/extension-sdk/tool-utils';
 
 interface InsertResult {
   path:string;
@@ -21,23 +19,6 @@ interface InsertResult {
   line?: number;
   insertedLines?: number;
   error?: string;
-}
-
-function isInsertEntry(value: unknown): value is InsertEntry {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && typeof (value as Record<string, unknown>).path === 'string'
-    && typeof (value as Record<string, unknown>).line === 'number'
-    && typeof (value as Record<string, unknown>).content === 'string';
-}
-
-export function normalizeInsertArgs(args: Record<string, unknown>): InsertEntry[] | undefined {
-  return normalizeObjectArrayArg(args, {
-    arrayKey: 'files',
-    singularKeys: ['file'],
-    isEntry: isInsertEntry,
-  });
 }
 
 export const insertCode: ToolDefinition = {
@@ -69,11 +50,7 @@ export const insertCode: ToolDefinition = {
     },
   },
   handler: async (args) => {
-    const fileList = normalizeObjectArrayArg(args, {
-      arrayKey: 'files',
-      singularKeys: ['file'],
-      isEntry: isInsertEntry,
-    });
+    const fileList = normalizeInsertArgs(args);
 
     if(!fileList || fileList.length === 0) {
       throw new Error('files 参数必须是非空数组');
