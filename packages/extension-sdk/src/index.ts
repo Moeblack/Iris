@@ -136,6 +136,7 @@ export type {
   PluginEntry,
   PluginEventBusLike,
   PluginHook,
+  PluginInfoLike,
   PluginLogger,
   PluginManagerLike,
   PreBootstrapContext,

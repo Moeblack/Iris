@@ -72,10 +72,28 @@ export interface PluginEventBusLike {
   emit?(event: string, ...args: unknown[]): void;
   on?(event: string, listener: (...args: unknown[]) => void): void;
   off?(event: string, listener: (...args: unknown[]) => void): void;
+  /** 发射事件（emit 的别名，语义更清晰） */
+  fire?(event: string, ...args: unknown[]): void;
+}
+
+/** 插件信息（查询用） */
+export interface PluginInfoLike {
+  name: string;
+  version: string;
+  description?: string;
+  enabled: boolean;
+  type: string;
+  priority: number;
+  hookCount: number;
 }
 
 export interface PluginManagerLike {
-  listPlugins?(): Array<Record<string, unknown>>;
+  /** 列出所有已加载的插件信息 */
+  listPlugins?(): PluginInfoLike[];
+  /** 根据名称查找指定插件 */
+  getPlugin?(name: string): PluginInfoLike | undefined;
+  /** 获取已加载插件数量 */
+  readonly size?: number;
 }
 
 export interface IrisAPI {
@@ -150,6 +168,12 @@ export interface MCPManagerLike {
   listServers?(): unknown[];
   getConfig?(): Record<string, unknown>;
   connectAll?(): Promise<void>;
+  /** 断开所有 MCP 服务器连接 */
+  disconnectAll?(): Promise<void>;
+  /** 热重载：断开旧连接，用新配置重新连接 */
+  reload?(config: Record<string, unknown>): Promise<void>;
+  /** 获取所有已连接服务器提供的工具列表 */
+  getTools?(): unknown[];
 }
 
 export interface ConfigManagerLike {
@@ -217,7 +241,7 @@ export interface ExtensionManagerLike {
   listPlatformCatalog?(): unknown[];
 }
 
-/** Agent 管理接口（CRUD 操作 agents.yaml） */
+/** Agent 管理接口（CRUD 操作 agents.yaml + 运行时状态查询） */
 export interface AgentManagerLike {
   getStatus(): { exists: boolean; enabled: boolean; agents: AgentDefinitionLike[]; manifestPath: string };
   setEnabled(enabled: boolean): { success: boolean; message: string };
@@ -226,6 +250,12 @@ export interface AgentManagerLike {
   update(name: string, fields: { description?: string; dataDir?: string }): { success: boolean; message: string };
   delete(name: string): { success: boolean; message: string };
   resetCache(): void;
+  /** 获取当前活跃会话 ID */
+  getActiveSessionId?(): string | undefined;
+  /** 获取指定会话最近一次 LLM 调用的 Token 用量 */
+  getLastSessionTokens?(sessionId: string): number | undefined;
+  /** 获取所有会话的 Token 用量映射 */
+  getAllSessionTokens?(): Record<string, number>;
 }
 
 
@@ -362,6 +392,15 @@ export interface PluginContext {
   ensureConfigFile(filename: string, content: string): boolean;
   /** 从宿主配置目录读取指定 YAML 配置段（不含 .yaml 后缀） */
   readConfigSection(section: string): Record<string, unknown> | undefined;
+
+  // ── 插件间协作 ──
+
+  /** 获取插件间事件总线（插件间通信通道） */
+  getEventBus?(): PluginEventBusLike;
+  /** 获取插件管理器（查询其他已加载插件） */
+  getPluginManager?(): PluginManagerLike;
+  /** 更新当前插件已注册 Hook 的优先级 */
+  setHookPriority?(hookName: string, priority: number): boolean;
 }
 
 export interface IrisPlugin {

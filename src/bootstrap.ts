@@ -342,6 +342,15 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
       update: (name: string, fields: any) => { const { updateAgent } = require('./agents'); return updateAgent(name, fields); },
       delete: (name: string) => { const { deleteAgent } = require('./agents'); return deleteAgent(name); },
       resetCache: () => { const { resetCache } = require('./agents'); resetCache(); },
+      getActiveSessionId: () => backend.getActiveSessionId(),
+      getLastSessionTokens: (sessionId: string) => (backend as any).lastSessionTokens?.get(sessionId),
+      getAllSessionTokens: () => {
+        const map: Map<string, number> = (backend as any).lastSessionTokens;
+        if (!map) return {};
+        const result: Record<string, number> = {};
+        for (const [k, v] of map) result[k] = v;
+        return result;
+      },
     },
     toolPreviewUtils: (() => {
       // 懒加载工具预览工具集
