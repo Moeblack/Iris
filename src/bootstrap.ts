@@ -355,6 +355,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     patchPrototype,
     registerWebRoute: registerDeferredWebRoute,
     registerWebPanel,
+    listAgents: () => { const { loadAgentDefinitions } = require('./agents'); return loadAgentDefinitions(); },
   } satisfies Record<string, unknown> as unknown as IrisAPI;
 
   if (pluginManager && pluginManager.size > 0) {
