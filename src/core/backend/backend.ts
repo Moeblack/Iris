@@ -11,6 +11,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawnSync } from 'child_process';
@@ -33,7 +34,7 @@ import { createLogger } from '../../logger';
 import { sanitizeHistory } from '../history-sanitizer';
 import { estimateTokenCount } from 'tokenx';
 import { extractText, isTextPart, isInlineDataPart } from '../../types';
-import type { Content, Part, UsageMetadata } from '../../types';
+import type { Content, Part, UsageMetadata, ToolInvocation } from '../../types';
 import { summarizeHistory } from '../summarizer';
 import { resetConfigToDefaults as doResetConfigToDefaults } from '../../config/index';
 
@@ -45,6 +46,10 @@ import { UndoRedoManager } from './undo-redo';
 import { buildPluginHookConfig } from './plugins';
 
 const logger = createLogger('Backend');
+
+// ============ 会话上下文（用于在异步调用链中传递 sessionId） ============
+
+export const sessionContext = new AsyncLocalStorage<string>();
 
 // ============ Backend 类 ============
 
@@ -67,9 +72,6 @@ export class Backend extends EventEmitter {
   private toolLoop: ToolLoop;
   private toolLoopConfig: ToolLoopConfig;
   private toolState: ToolStateManager;
-
-  /** 当前正在处理的 sessionId（用于工具事件转发） */
-  private activeSessionId?: string;
 
   /** 每个 sessionId 的 AbortController，用于中止正在进行的 chat */
   private activeAbortControllers = new Map<string, AbortController>();
@@ -167,7 +169,9 @@ export class Backend extends EventEmitter {
         ocrService: this.ocrService,
       });
       const llmUserParts = preparePartsForLLM(storedUserParts, this.currentLLMConfig);
-      await this.handleMessage(sessionId, storedUserParts, llmUserParts, abortController.signal, platformName);
+      await sessionContext.run(sessionId, () =>
+        this.handleMessage(sessionId, storedUserParts, llmUserParts, abortController.signal, platformName)
+      );
     } catch (err) {
       // 区分用户主动 abort 和其他错误
       if (abortController.signal.aborted) {
@@ -180,7 +184,6 @@ export class Backend extends EventEmitter {
       this.emit('done', sessionId, Date.now() - startTime);
     } finally {
       this.activeAbortControllers.delete(sessionId);
-      this.activeSessionId = undefined;
     }
   }
 
@@ -422,9 +425,9 @@ export class Backend extends EventEmitter {
     return this.prompt;
   }
 
-  /** 获取当前活跃的 sessionId（工具执行期间有效） */
+  /** 获取当前活跃的 sessionId（通过 AsyncLocalStorage 从当前异步上下文读取） */
   getActiveSessionId(): string | undefined {
-    return this.activeSessionId;
+    return sessionContext.getStore();
   }
 
   /** 获取模式注册表引用 */
@@ -642,11 +645,10 @@ export class Backend extends EventEmitter {
   }
 
   private async handleMessage(sessionId: string, storedUserParts: Part[], llmUserParts: Part[], signal?: AbortSignal, platformName?: string): Promise<void> {
-    this.activeSessionId = sessionId;
     const startTime = Date.now();
 
-    // 清除上一轮残留的工具调用记录
-    this.toolState.clearAll();
+    // 清除本会话上一轮残留的工具调用记录
+    this.toolState.clearSession(sessionId);
 
     // 1. 加载历史并追加用户消息
     let storedHistory = await this.storage.getHistory(sessionId);
@@ -762,6 +764,7 @@ export class Backend extends EventEmitter {
 
     // 6. 执行工具循环
     const result = await loop.run(history, callLLM, {
+      sessionId,
       extraParts,
       onMessageAppend: (content) => this.storage.addMessage(sessionId, content),
       onModelContent: (content) => { this.emit('assistant:content', sessionId, content); },
@@ -854,21 +857,22 @@ export class Backend extends EventEmitter {
         logger.warn('Auto-compact (post-response) failed:', err);
       }
     }
-
-    this.activeSessionId = undefined;
   }
 
   // ============ 工具事件转发 ============
 
   private setupToolStateForwarding(): void {
-    const emitToolUpdate = () => {
-      if (!this.activeSessionId) return;
-      const invocations = this.toolState.getAll();
-      this.emit('tool:update', this.activeSessionId, invocations);
-    };
+    this.toolState.on('created', (invocation: ToolInvocation) => {
+      const sid = invocation.sessionId;
+      if (!sid) return;
+      this.emit('tool:update', sid, this.toolState.getBySession(sid));
+    });
 
-    this.toolState.on('created', emitToolUpdate);
-    this.toolState.on('stateChange', emitToolUpdate);
+    this.toolState.on('stateChange', (event: { invocation: ToolInvocation }) => {
+      const sid = event.invocation.sessionId;
+      if (!sid) return;
+      this.emit('tool:update', sid, this.toolState.getBySession(sid));
+    });
   }
 
   // ============ 模式解析 ============

@@ -68,6 +68,7 @@ export class ToolStateManager extends EventEmitter {
     toolName: string,
     args: Record<string, unknown> = {},
     initialStatus: ToolStatus = 'queued',
+    sessionId?: string,
   ): ToolInvocation {
     const id = `tool_${++this.counter}_${Date.now()}`;
     const now = Date.now();
@@ -79,6 +80,7 @@ export class ToolStateManager extends EventEmitter {
       status: initialStatus,
       createdAt: now,
       updatedAt: now,
+      sessionId,
     };
 
     this.invocations.set(id, invocation);
@@ -200,6 +202,18 @@ export class ToolStateManager extends EventEmitter {
   clearAll(): void {
     this.invocations.clear();
     this.counter = 0;
+  }
+
+  /** 清除指定会话的调用记录 */
+  clearSession(sessionId: string): void {
+    for (const [id, inv] of this.invocations) {
+      if (inv.sessionId === sessionId) this.invocations.delete(id);
+    }
+  }
+
+  /** 获取指定会话的所有调用记录 */
+  getBySession(sessionId: string): ToolInvocation[] {
+    return Array.from(this.invocations.values()).filter(i => i.sessionId === sessionId);
   }
 
   // ---- 审批等待 ----

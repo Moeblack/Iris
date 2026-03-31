@@ -256,6 +256,7 @@ async function executeSingle(
         return {
           functionResponse: {
             name: toolName,
+            callId: call.functionCall.callId,
             response: { error: '用户已拒绝执行该工具' },
           },
         };
@@ -271,6 +272,7 @@ async function executeSingle(
         return {
           functionResponse: {
             name: toolName,
+            callId: call.functionCall.callId,
             response: { error: '用户在 diff 预览中拒绝了执行' },
           },
         };

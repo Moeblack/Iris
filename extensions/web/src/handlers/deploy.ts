@@ -259,13 +259,33 @@ function normalizeOptions(raw: unknown): DeployFormOptions {
   const source = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
   const portValue = typeof source.port === 'number' ? source.port : Number(source.port)
   return {
-    domain: typeof source.domain === 'string' ? source.domain.trim() : '',
+    domain: typeof source.domain === 'string' ? source.domain.trim().replace(/[^a-z0-9.\-]/gi, '') : '',
     port: Number.isFinite(portValue) ? Math.trunc(portValue) : 8192,
     deployPath: normalizeDeployPath(typeof source.deployPath === 'string' ? source.deployPath : process.cwd()),
-    user: typeof source.user === 'string' ? source.user.trim() : '',
+    user: typeof source.user === 'string' ? source.user.trim().replace(/[^a-z0-9_$\-]/gi, '') : '',
     enableHttps: !!source.enableHttps,
     enableAuth: !!source.enableAuth,
   }
+}
+
+/** RFC 952/1123 hostname validation */
+function isValidDomain(value: string): boolean {
+  if (!value || value.length > 253) return false
+  return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(value)
+}
+
+/** Linux username character set validation */
+function isValidLinuxUser(value: string): boolean {
+  if (!value || value.length > 32) return false
+  return /^[a-z_][a-z0-9_-]*\$?$/i.test(value)
+}
+
+/** Deploy path validation — reject injection characters */
+function isValidDeployPath(value: string): boolean {
+  if (!value || !value.startsWith('/')) return false
+  if (/[\x00-\x1f\x7f;`]|\$\(/.test(value)) return false
+  if (/(^|\/)\.\.($|\/)/.test(value)) return false
+  return true
 }
 
 function buildNginxConfig(options: DeployFormOptions): string {
@@ -432,6 +452,8 @@ async function buildPreview(configDir: string, rawOptions: unknown): Promise<Dep
 
   if (!options.domain) {
     errors.push('请填写域名后再部署')
+  } else if (!isValidDomain(options.domain)) {
+    errors.push('域名格式无效（仅允许字母、数字、连字符和点号）')
   }
 
   if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) {
@@ -442,10 +464,14 @@ async function buildPreview(configDir: string, rawOptions: unknown): Promise<Dep
     errors.push('请填写部署路径')
   } else if (!options.deployPath.startsWith('/')) {
     errors.push('部署路径必须是 Linux 绝对路径')
+  } else if (!isValidDeployPath(options.deployPath)) {
+    errors.push('部署路径包含不允许的字符')
   }
 
   if (!options.user) {
     errors.push('请填写运行用户')
+  } else if (!isValidLinuxUser(options.user)) {
+    errors.push('用户名格式无效（仅允许小写字母、数字、下划线和连字符）')
   }
 
   if (isLinuxHost()) {

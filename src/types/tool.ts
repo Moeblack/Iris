@@ -51,6 +51,8 @@ export interface ToolInvocation {
   createdAt: number;
   /** 最后状态更新时间戳 */
   updatedAt: number;
+  /** 关联的会话 ID（多会话并发时用于事件路由） */
+  sessionId?: string;
 }
 
 /** 状态变更事件载荷 */

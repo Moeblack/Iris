@@ -92,6 +92,8 @@ export interface ToolLoopRunOptions {
   signal?: AbortSignal;
   /** LLM 调用重试时的回调（attempt 从 1 开始） */
   onRetry?: (attempt: number, maxRetries: number, error: string) => void;
+  /** 关联的会话 ID（多会话并发时用于工具状态隔离） */
+  sessionId?: string;
 }
 
 export class ToolLoop {
@@ -193,7 +195,7 @@ export class ToolLoop {
       }
 
       // 执行工具（通过 scheduler 分批调度）
-      const responseParts = await this.executeTools(functionCalls, signal, options?.onAttachments);
+      const responseParts = await this.executeTools(functionCalls, signal, options?.onAttachments, options?.sessionId);
 
       // 工具执行后再次检查 abort
       if (signal?.aborted) {
@@ -294,6 +296,7 @@ export class ToolLoop {
     calls: FunctionCallPart[],
     signal?: AbortSignal,
     onAttachments?: (attachments: ToolAttachment[]) => void,
+    sessionId?: string,
   ): Promise<FunctionResponsePart[]> {
     const plan = buildExecutionPlan(calls, this.tools);
 
@@ -304,6 +307,7 @@ export class ToolLoop {
           call.functionCall.name,
           call.functionCall.args as Record<string, unknown>,
           'queued',
+          sessionId,
         ),
       );
       return executePlan(

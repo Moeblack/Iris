@@ -27,6 +27,8 @@ export interface ToolInvocation {
   error?: string;
   createdAt: number;
   updatedAt: number;
+  /** 关联的会话 ID（多会话并发时用于事件路由） */
+  sessionId?: string;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
