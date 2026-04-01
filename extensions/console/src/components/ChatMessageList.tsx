@@ -22,7 +22,12 @@ export function ChatMessageList({
   modelName,
 }: ChatMessageListProps) {
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-  const lastIsActiveAssistant = isGenerating && lastMessage?.role === 'assistant';
+  // 判断最后一条消息是否正在活跃生成/流式输出。
+  // 除了 isGenerating（用户发消息触发的 turn），还需检查 isStreaming：
+  // 异步子代理完成后触发的 notification turn 不经过 handleInput，
+  // 因此 isGenerating 不会被设为 true，但 startStream() 仍会将 isStreaming 设为 true。
+  // 只检查 isGenerating 会导致 notification turn 的流式内容被跳过、最后一次性刷出。
+  const lastIsActiveAssistant = (isGenerating || isStreaming) && lastMessage?.role === 'assistant';
 
   return (
     <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">

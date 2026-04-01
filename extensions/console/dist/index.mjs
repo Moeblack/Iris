@@ -2076,7 +2076,7 @@ function ChatMessageList({
   modelName
 }) {
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-  const lastIsActiveAssistant = isGenerating && lastMessage?.role === "assistant";
+  const lastIsActiveAssistant = (isGenerating || isStreaming) && lastMessage?.role === "assistant";
   return /* @__PURE__ */ jsxDEV23("scrollbox", {
     flexGrow: 1,
     stickyScroll: true,

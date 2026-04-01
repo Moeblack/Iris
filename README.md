@@ -119,6 +119,44 @@ npm run setup:extensions
 bun run dev            # 启动（直接使用 Bun 运行时）
 ```
 
+#### Extension 开发流程（以 Console 为例）
+
+Extension（如 `extensions/console/`）的源码在 `src/` 下，运行时入口是编译后的 `dist/index.mjs`。修改源码后需要重新编译才能生效。
+
+**本地开发：**
+
+```bash
+# 1. 修改 extensions/console/src/ 下的源码
+# 2. 编译（将 src/ 打包为 dist/index.mjs）
+cd extensions/console && bun install && bun run build
+# 3. 启动
+cd ../.. && bun start
+```
+
+`bun install` 只需要在首次或依赖变化时执行。日常改代码只需 `bun run build` + `bun start`。
+
+**推送到服务器：**
+
+`dist/index.mjs` 已纳入 git 版本管理。修改源码并编译后，将 dist 一并提交：
+
+```bash
+cd extensions/console && bun run build
+cd ../..
+git add -A && git commit -m "feat: ..." && git push
+```
+
+服务器上直接拉取即可运行，不需要在服务器上编译：
+
+```bash
+git pull && bun start
+```
+
+**注意事项：**
+
+- 编辑器中 `@types/react` 相关的类型错误可以忽略，不影响 `bun run build` 打包。
+- 如果 `bun install` 报 `@irises/extension-sdk` 解析失败，先在项目根目录执行 `bun install`，让 bun 把本地包链接到 extension 的 `node_modules` 中。
+- `npm run setup:extensions` 只安装各 extension 目录的依赖，不执行编译。编译需要手动进入对应 extension 目录执行 `bun run build`。
+
 > Console 平台（TUI 界面）依赖 [OpenTUI](https://opentui.com/) 的 Bun FFI，因此仅在 Bun 运行时下可用。其他平台在 Node.js 和 Bun 下均可正常运行。
 
 如需手动准备配置目录，可先复制模板到运行时数据目录：
