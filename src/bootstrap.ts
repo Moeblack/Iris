@@ -308,7 +308,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     modes: modeRegistry,
     prompt,
     config,
-    mcpManager,
+    get mcpManager() { return mcpManager; },
     ocrService,
     extensions,
     configManager: {
@@ -423,7 +423,7 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     configDir,
     router,
     tools,
-    mcpManager,
+    get mcpManager() { return mcpManager; },
     setMCPManager: (manager?: MCPManager) => { mcpManager = manager; },
     getMCPManager: () => mcpManager,
     agentName: agentLabel,
