@@ -236,12 +236,20 @@ export class Backend extends EventEmitter {
     };
     registry.on('token-update', onTokenUpdate);
 
+    // 转发异步子代理的 chunk 心跳事件。
+    // 平台层用此事件驱动 spinner 动画帧——只有数据真正流动时 spinner 才转。
+    const onChunkHeartbeat = (task: AgentTask) => {
+      this.emit('agent:notification', task.sessionId, task.taskId, 'chunk-heartbeat', '');
+    };
+    registry.on('chunk-heartbeat', onChunkHeartbeat);
+
     this.agentTaskRegistryCleanup = () => {
       registry.off('registered', onRegistered);
       registry.off('completed', onCompleted);
       registry.off('failed', onFailed);
       registry.off('killed', onKilled);
       registry.off('token-update', onTokenUpdate);
+      registry.off('chunk-heartbeat', onChunkHeartbeat);
     };
   }
 

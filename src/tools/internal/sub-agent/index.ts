@@ -364,6 +364,9 @@ async function runSubAgentAsync(
       const parts: Part[] = [];
       let usageMetadata: UsageMetadata | undefined;
       for await (const chunk of router.chatStream(request, modelName, callSignal)) {
+        // 每收到一个 chunk 就发心跳，驱动平台层 StatusBar 的 spinner 动画。
+        // 只有真正有数据流动时 spinner 才转，停止流动时 spinner 静止。
+        deps.agentTaskRegistry?.emitChunkHeartbeat(taskId);
         if (chunk.partsDelta && chunk.partsDelta.length > 0) {
           for (const part of chunk.partsDelta) {
             appendMergedPart(parts, part, Date.now());

@@ -1,7 +1,13 @@
 /** @jsxImportSource @opentui/react */
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { C } from '../theme';
+
+// Braille spinner 帧序列：后台任务活跃指示。
+// 由真实的 chunk 心跳事件驱动帧递增，只有数据真正在流动时 spinner 才转。
+// 数据停止流动（如子代理等待工具执行结果）时 spinner 静止——
+// 用户可以由此区分"正在接收数据"和"正在等待"两种状态。
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 interface StatusBarProps {
   agentName?: string;
@@ -14,32 +20,22 @@ interface StatusBarProps {
   backgroundTaskCount?: number;
   /** 所有后台任务的累计 token 数 */
   backgroundTaskTokens?: number;
+  /** chunk 心跳驱动的 spinner 帧索引 */
+  backgroundTaskSpinnerFrame?: number;
 }
 
-// Braille spinner 帧序列：用于后台任务活跃指示。
-// 每 120ms 切换一帧，让用户直观感知子代理仍在运行中。
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-/** 当有后台任务运行时，返回循环的 spinner 字符；否则返回空字符串 */
-function useSpinner(active: boolean): string {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 120);
-    return () => clearInterval(timer);
-  }, [active]);
-  return active ? SPINNER_FRAMES[frame] : '';
-}
-
-export function StatusBar({ agentName, modeName, modelName, contextTokens, contextWindow, queueSize, backgroundTaskCount, backgroundTaskTokens }: StatusBarProps) {
-  const hasBackgroundTasks = (backgroundTaskCount ?? 0) > 0;
-  const spinner = useSpinner(hasBackgroundTasks);
+export function StatusBar({ agentName, modeName, modelName, contextTokens, contextWindow, queueSize, backgroundTaskCount, backgroundTaskTokens, backgroundTaskSpinnerFrame }: StatusBarProps) {
   const resolvedModeName = modeName ?? 'normal';
   const modeNameCapitalized = resolvedModeName.charAt(0).toUpperCase() + resolvedModeName.slice(1);
   const contextStr = contextTokens > 0 ? contextTokens.toLocaleString() : '-';
   const contextLimitStr = contextWindow ? `/${contextWindow.toLocaleString()}` : '';
   const contextPercent = contextTokens > 0 && contextWindow
     ? ` (${Math.round(contextTokens / contextWindow * 100)}%)`
+    : '';
+
+  const hasBackgroundTasks = (backgroundTaskCount ?? 0) > 0;
+  const spinner = hasBackgroundTasks
+    ? SPINNER_FRAMES[(backgroundTaskSpinnerFrame ?? 0) % SPINNER_FRAMES.length]
     : '';
 
   return (
@@ -57,8 +53,8 @@ export function StatusBar({ agentName, modeName, modelName, contextTokens, conte
               <span fg={C.warn}>{queueSize} 条排队中</span>
             </>
           ) : null}
-          {/* 异步子代理后台任务计数：让用户实时知道有多少子代理正在后台运行 */}
-          {backgroundTaskCount != null && backgroundTaskCount > 0 ? (
+          {/* 异步子代理后台任务指示：spinner 由 chunk 心跳驱动，数据流动时转，停止时静止 */}
+          {hasBackgroundTasks ? (
             <>
               <span fg={C.dim}> · </span>
               <span fg={C.accent}>

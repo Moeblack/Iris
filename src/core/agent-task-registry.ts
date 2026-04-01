@@ -135,6 +135,16 @@ export class AgentTaskRegistry extends EventEmitter {
   }
 
   /**
+   * 发射 chunk 心跳事件（异步子代理流式处理中每收到一个 chunk 时调用）。
+   * 供平台层驱动 spinner 动画帧——只有真正有数据流动时 spinner 才转。
+   */
+  emitChunkHeartbeat(taskId: string): void {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== 'running') return;
+    this.emit('chunk-heartbeat', task);
+  }
+
+  /**
    * 查询任务。
    */
   get(taskId: string): AgentTask | undefined {

@@ -42,6 +42,8 @@ export interface AppHandle {
   updateBackgroundTaskTokens(taskId: string, tokens: number): void;
   /** 移除已结束任务的 token 记录 */
   removeBackgroundTaskTokens(taskId: string): void;
+  /** 收到 chunk 心跳时推进 spinner 帧（只有数据真正流动时 spinner 才转） */
+  advanceBackgroundTaskSpinner(): void;
   /**
    * 从消息队列中出队下一条消息。
    * 由 App 组件通过 drainCallbackRef 注册实际实现。
@@ -70,6 +72,8 @@ export interface UseAppHandleReturn {
   backgroundTaskCount: number;
   /** 所有后台运行中的异步子代理的 token 总数 */
   backgroundTaskTokens: number;
+  /** chunk 心跳驱动的 spinner 帧索引（只有数据流动时才递增） */
+  backgroundTaskSpinnerFrame: number;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   commitTools: () => void;
 }
@@ -87,6 +91,9 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
   // 各后台任务的 token 计数（key=taskId, value=tokens），汇总后作为 backgroundTaskTokens 展示
   const backgroundTaskTokenMapRef = useRef<Map<string, number>>(new Map());
   const [backgroundTaskTokens, setBackgroundTaskTokens] = useState(0);
+  // chunk 心跳驱动的 spinner 帧计数器（不是定时器，只在数据真正流动时递增）
+  const spinnerFrameRef = useRef(0);
+  const [backgroundTaskSpinnerFrame, setBackgroundTaskSpinnerFrame] = useState(0);
 
   const streamPartsRef = useRef<MessagePart[]>([]);
   const toolInvocationsRef = useRef<ToolInvocation[]>([]);
@@ -321,6 +328,15 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
         for (const v of backgroundTaskTokenMapRef.current.values()) total += v;
         setBackgroundTaskTokens(total);
       },
+      advanceBackgroundTaskSpinner() {
+        // 每收到一个 chunk 心跳就推进 spinner 帧。
+        // 节流：每 4 个心跳才更新一次 React state，避免过于频繁的渲染。
+        // ref 始终递增，但 setState 按节流步长触发。
+        spinnerFrameRef.current += 1;
+        if (spinnerFrameRef.current % 4 === 0) {
+          setBackgroundTaskSpinnerFrame(spinnerFrameRef.current);
+        }
+      },
       drainQueue() {
         return drainCallbackRef.current?.() ?? undefined;
       },
@@ -340,6 +356,7 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
     pendingApplies,
     backgroundTaskCount,
     backgroundTaskTokens,
+    backgroundTaskSpinnerFrame,
     setMessages,
     commitTools,
   };

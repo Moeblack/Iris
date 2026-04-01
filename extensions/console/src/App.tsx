@@ -281,6 +281,7 @@ export function App({
         exitConfirmArmed={exitConfirm.exitConfirmArmed}
         backgroundTaskCount={appState.backgroundTaskCount}
         backgroundTaskTokens={appState.backgroundTaskTokens}
+        backgroundTaskSpinnerFrame={appState.backgroundTaskSpinnerFrame}
       />
     </box>
   );

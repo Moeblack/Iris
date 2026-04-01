@@ -338,6 +338,9 @@ export class ConsolePlatform extends PlatformAdapter {
           if (!isNaN(tokens)) {
             this.appHandle?.updateBackgroundTaskTokens(_taskId, tokens);
           }
+        } else if (status === 'chunk-heartbeat') {
+          // 真实数据流动心跳：推进 spinner 帧
+          this.appHandle?.advanceBackgroundTaskSpinner();
         }
       }
     });

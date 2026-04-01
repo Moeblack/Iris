@@ -31,6 +31,8 @@ interface BottomPanelProps {
   backgroundTaskCount?: number;
   /** 所有后台任务的累计 token 数 */
   backgroundTaskTokens?: number;
+  /** chunk 心跳驱动的 spinner 帧索引 */
+  backgroundTaskSpinnerFrame?: number;
 }
 
 export function BottomPanel({
@@ -52,6 +54,7 @@ export function BottomPanel({
   exitConfirmArmed,
   backgroundTaskCount,
   backgroundTaskTokens,
+  backgroundTaskSpinnerFrame,
 }: BottomPanelProps) {
   // 输入框仅在审批/确认对话框期间完全禁用
   const inputDisabled = !!(pendingConfirm || pendingApprovals.length > 0);
@@ -90,6 +93,7 @@ export function BottomPanel({
             queueSize={queueSize}
             backgroundTaskCount={backgroundTaskCount}
             backgroundTaskTokens={backgroundTaskTokens}
+            backgroundTaskSpinnerFrame={backgroundTaskSpinnerFrame}
           />
         </box>
       )}
