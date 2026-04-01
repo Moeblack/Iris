@@ -467,6 +467,8 @@ function dispatchChatStreamEvent(rawBlock: string, callbacks: ChatCallbacks): vo
       case 'retry': callbacks.onRetry?.(event.attempt, event.maxRetries, event.error); break
       case 'auto_compact': callbacks.onAutoCompact?.(event.summary); break
       case 'user_token': callbacks.onUserToken?.(event.tokenCount); break
+      case 'agent_notification': callbacks.onAgentNotification?.(event.taskId, event.status, event.summary); break
+      case 'turn_start': callbacks.onTurnStart?.(event.turnId, event.mode); break
     }
   } catch {
     // 忽略解析错误（如心跳）

@@ -50,6 +50,7 @@ import { MessageQueue } from '../message-queue';
 import type { QueuedMessage } from '../message-queue';
 import { TurnLock } from '../turn-lock';
 import { StreamingToolExecutor } from '../../tools/streaming-executor';
+import type { AgentTaskRegistry, AgentTask } from '../agent-task-registry';
 
 import type { BackendConfig, ImageInput, DocumentInput, UndoScope, UndoOperationResult, RedoOperationResult } from './types';
 import { buildStoredUserParts } from './media';
@@ -132,6 +133,11 @@ export class Backend extends EventEmitter {
    */
   private _draining = false;
 
+  /** 异步子代理任务注册表（由 bootstrap 注入） */
+  private agentTaskRegistry?: AgentTaskRegistry;
+  /** setAgentTaskRegistry 注册的监听器清理函数（防止热重载泄漏） */
+  private agentTaskRegistryCleanup?: () => void;
+
   constructor(
     router: LLMRouter,
     storage: StorageProvider,
@@ -193,6 +199,42 @@ export class Backend extends EventEmitter {
     this.toolLoopConfig.afterToolExec = hookConfig.afterToolExec;
     this.toolLoopConfig.beforeLLMCall = hookConfig.beforeLLMCall;
     this.toolLoopConfig.afterLLMCall = hookConfig.afterLLMCall;
+  }
+
+  /** 注入异步子代理任务注册表，将 registry 生命周期事件转发为 BackendEvents */
+  setAgentTaskRegistry(registry: AgentTaskRegistry): void {
+    // 清理旧 registry 的监听器（防止热重载时泄漏）
+    this.agentTaskRegistryCleanup?.();
+
+    this.agentTaskRegistry = registry;
+
+    // 转发 registry 生命周期事件为 agent:notification。
+    // 注意：registry 事件名与 task.status 不完全对应（registered→running），
+    // 此处统一使用事件名作为 status，保持语义清晰。
+    const onRegistered = (task: AgentTask) => {
+      this.emit('agent:notification', task.sessionId, task.taskId, 'registered', task.description);
+    };
+    const onCompleted = (task: AgentTask) => {
+      this.emit('agent:notification', task.sessionId, task.taskId, 'completed', task.description);
+    };
+    const onFailed = (task: AgentTask) => {
+      this.emit('agent:notification', task.sessionId, task.taskId, 'failed', task.description);
+    };
+    const onKilled = (task: AgentTask) => {
+      this.emit('agent:notification', task.sessionId, task.taskId, 'killed', task.description);
+    };
+
+    registry.on('registered', onRegistered);
+    registry.on('completed', onCompleted);
+    registry.on('failed', onFailed);
+    registry.on('killed', onKilled);
+
+    this.agentTaskRegistryCleanup = () => {
+      registry.off('registered', onRegistered);
+      registry.off('completed', onCompleted);
+      registry.off('failed', onFailed);
+      registry.off('killed', onKilled);
+    };
   }
 
   /**
@@ -503,6 +545,23 @@ export class Backend extends EventEmitter {
     return this.turnLock;
   }
 
+  // ============ 异步子代理任务查询（只读） ============
+
+  /** 获取指定 session 的所有异步子代理任务 */
+  getAgentTasks(sessionId: string): AgentTask[] {
+    return this.agentTaskRegistry?.getBySession(sessionId) ?? [];
+  }
+
+  /** 获取指定 session 中正在运行的异步子代理任务 */
+  getRunningAgentTasks(sessionId: string): AgentTask[] {
+    return this.agentTaskRegistry?.getRunningBySession(sessionId) ?? [];
+  }
+
+  /** 按 taskId 查询单个异步子代理任务 */
+  getAgentTask(taskId: string): AgentTask | undefined {
+    return this.agentTaskRegistry?.get(taskId);
+  }
+
   // ============ Skill 管理 ============
 
   setOnSkillsChanged(callback: () => void): void {
@@ -723,6 +782,10 @@ export class Backend extends EventEmitter {
     this.activeAbortControllers.set(msg.sessionId, abortController);
 
     try {
+      // 通知平台层本轮 turn 的类型（chat / task-notification），
+      // 平台可据此对后续流式事件做差异化渲染。
+      this.emit('turn:start', msg.sessionId, msg.turnId, msg.mode);
+
       if (msg.mode === 'task-notification') {
         // ---- task-notification 路径（异步子代理完成通知） ----
         // 不走用户消息的完整流程，直接以 user-role message 注入 LLM 对话历史。

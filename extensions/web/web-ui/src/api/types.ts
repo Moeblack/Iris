@@ -64,6 +64,11 @@ export interface Message {
   meta?: MessageMeta
   /** 前端记录的消息时间戳（毫秒） */
   timestamp?: number
+  /** 如果此消息由异步子代理 notification turn 触发 */
+  notificationSource?: {
+    taskId: string
+    description: string
+  }
 }
 
 /** 会话摘要 */
@@ -311,6 +316,28 @@ export interface ChatCallbacks {
   onRetry?: (attempt: number, maxRetries: number, error: string) => void
   onAutoCompact?: (summary: string) => void
   onUserToken?: (tokenCount: number) => void
+  /** 异步子代理任务状态变更（registered/completed/failed/killed） */
+  onAgentNotification?: (taskId: string, status: string, summary: string) => void
+  /** Turn 开始（可区分 chat 和 task-notification turn） */
+  onTurnStart?: (turnId: string, mode: 'chat' | 'task-notification') => void
+}
+
+/** 异步子代理任务信息 */
+export interface AgentTaskInfo {
+  taskId: string
+  sessionId: string
+  description: string
+  status: 'running' | 'completed' | 'failed' | 'killed'
+  startTime: number
+  endTime?: number
+}
+
+/** 通知 WebSocket 回调 */
+export interface NotificationCallbacks {
+  onAgentNotification?: (sessionId: string, taskId: string, status: string, summary: string) => void
+  onTurnStart?: (sessionId: string, turnId: string, mode: 'chat' | 'task-notification') => void
+  /** 通过 WS 接收的标准聊天事件（SSE 不可用时的 fallback） */
+  onChatEvent?: (sessionId: string, event: Record<string, unknown>) => void
 }
 
 

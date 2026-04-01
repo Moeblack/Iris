@@ -465,6 +465,10 @@ export function useChat() {
 
     let receivedFinalAssistantPayload = false
     let requestNeedsHistoryRefresh = false
+    /** 当前 turn 是否为 notification turn（由 turn_start 设置） */
+    let isNotificationTurn = false
+    let notificationTaskId: string | undefined
+    let notificationTaskDescription: string | undefined
     if (activeRequestSessionId) {
       markSessionStreaming(activeRequestSessionId)
     }
@@ -512,6 +516,17 @@ export function useChat() {
           })
         }
       },
+      onAgentNotification(taskId, status, summary) {
+        if (isStale()) return
+        if (status === 'completed' || status === 'failed' || status === 'killed') {
+          notificationTaskId = taskId
+          notificationTaskDescription = summary
+        }
+      },
+      onTurnStart(_turnId, mode) {
+        if (isStale()) return
+        isNotificationTurn = mode === 'task-notification'
+      },
       onStreamStart() {
         if (isStale()) return
         receivedFinalAssistantPayload = false
@@ -533,6 +548,13 @@ export function useChat() {
       onAssistantContent(message) {
         if (isStale()) return
         receivedFinalAssistantPayload = true
+        // 为 notification turn 的消息标记来源
+        if (isNotificationTurn && notificationTaskDescription) {
+          message.notificationSource = {
+            taskId: notificationTaskId ?? '',
+            description: notificationTaskDescription,
+          }
+        }
         if (hasToolParts(message)) {
           // 工具消息：立即提交（保持现有行为）
           requestNeedsHistoryRefresh = true

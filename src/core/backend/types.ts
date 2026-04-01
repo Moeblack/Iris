@@ -115,8 +115,15 @@ export interface BackendEvents {
   'retry': (sessionId: string, attempt: number, maxRetries: number, error: string) => void;
   /** 用户输入折算后的 token 数（估算值） */
   'user:token': (sessionId: string, tokenCount: number) => void;
-  /** 当前用户回合完成（统一耗时来源） */
-  'done': (sessionId: string, durationMs: number) => void;
+  /** 当前回合完成（统一耗时来源；turnId 可用于区分用户 turn 与 notification turn） */
+  'done': (sessionId: string, durationMs: number, turnId?: string) => void;
+  /**
+   * 回合开始（在 handleMessage / handleNotificationTurn 之前 emit）。
+   *
+   * 平台层可通过 mode 区分用户消息 turn 和异步子代理 notification turn，
+   * 从而对 notification turn 产生的后续事件做差异化渲染。
+   */
+  'turn:start': (sessionId: string, turnId: string, mode: 'chat' | 'task-notification') => void;
   /** 一轮模型输出完成后的完整内容（结构化） */
   'assistant:content': (sessionId: string, content: Content) => void;
   /** 自动上下文压缩完成（阈值触发） */
@@ -131,9 +138,8 @@ export interface BackendEvents {
   /**
    * 异步子代理状态通知（供平台层展示后台任务状态）。
    *
-   * 当异步子代理完成/失败/被中止时，Backend 在通过 task-notification
-   * 触发主 LLM 新 turn 之前，先 emit 此事件让平台层得知。
-   *
+   * 当异步子代理注册/完成/失败/被中止时，Backend emit 此事件让平台层得知。
+   * status 取值：'registered' | 'completed' | 'failed' | 'killed'
    */
   'agent:notification': (sessionId: string, taskId: string, status: string, summary: string) => void;
 }

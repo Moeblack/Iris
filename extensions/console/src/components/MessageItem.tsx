@@ -66,6 +66,10 @@ export interface ChatMessage {
   createdAt?: number;
   isError?: boolean;
   isCommand?: boolean;
+  /** 是否由异步子代理 notification turn 触发 */
+  isNotification?: boolean;
+  /** notification turn 的任务描述（供显示） */
+  notificationDescription?: string;
   parts: MessagePart[];
   tokenIn?: number;
   cachedTokenIn?: number;
@@ -156,8 +160,9 @@ export const MessageItem = React.memo(function MessageItem(
     );
   }
 
-  const labelName = isSummary ? 'context' : isUser ? 'you' : (msg.isCommand ? 'shell' : (msg.modelName || modelName || 'iris').toLowerCase());
-  const labelColor = isSummary ? C.warn : isUser ? C.roleUser : (msg.isError ? C.error : (msg.isCommand ? C.command : C.roleAssistant));
+  const isNotification = msg.isNotification === true;
+  const labelName = isSummary ? 'context' : isUser ? 'you' : (msg.isCommand ? 'shell' : (isNotification ? 'bg-task' : (msg.modelName || modelName || 'iris').toLowerCase()));
+  const labelColor = isSummary ? C.warn : isUser ? C.roleUser : (msg.isError ? C.error : (msg.isCommand ? C.command : (isNotification ? C.warn : C.roleAssistant)));
   const headerText = `\u00b7 ${labelName} `;
 
   const displayParts: MessagePart[] = [...msg.parts];

@@ -59,6 +59,18 @@ export interface IrisToolInvocationLike {
   createdAt: number;
 }
 
+// ── 异步子代理任务可观测性 ──
+
+/** 异步子代理任务的只读快照（供平台层查询和展示） */
+export interface AgentTaskInfoLike {
+  taskId: string;
+  sessionId: string;
+  description: string;
+  status: 'running' | 'completed' | 'failed' | 'killed';
+  startTime: number;
+  endTime?: number;
+}
+
 export interface IrisBackendLike {
   on(event: string, listener: (...args: any[]) => void): this;
   once?(event: string, listener: (...args: any[]) => void): this;
@@ -89,6 +101,12 @@ export interface IrisBackendLike {
   summarize?(sessionId: string): Promise<unknown>;
   resetConfigToDefaults?(): unknown;
   getToolNames?(): string[];
+  /** 查询指定 session 的所有异步子代理任务（只读） */
+  getAgentTasks?(sessionId: string): AgentTaskInfoLike[];
+  /** 查询指定 session 中正在运行的异步子代理任务（只读） */
+  getRunningAgentTasks?(sessionId: string): AgentTaskInfoLike[];
+  /** 按 taskId 查询单个异步子代理任务（只读） */
+  getAgentTask?(taskId: string): AgentTaskInfoLike | undefined;
 }
 
 /**

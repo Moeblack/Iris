@@ -721,6 +721,26 @@ pre.doc-preview-content {
   color: var(--error, #ff4757);
 }
 
+/* 异步子代理 notification turn 标识 */
+.notification-turn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  margin: 8px 0 4px;
+  border-radius: 6px;
+  background: rgba(255, 165, 0, 0.08);
+  border: 1px solid rgba(255, 165, 0, 0.25);
+  color: var(--warn, #ffa502);
+  font-size: 0.8em;
+  line-height: 1.4;
+}
+
+.notification-turn-icon {
+  font-size: 1em;
+  opacity: 0.8;
+}
+
 .message-meta-icon,
 .message-action-icon,
 .tool-copy-icon,

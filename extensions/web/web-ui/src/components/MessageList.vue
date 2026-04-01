@@ -65,6 +65,14 @@
 
       <template v-for="item in displayItems" :key="item.key">
         <template v-if="item.kind === 'message'">
+          <!-- 异步子代理 notification turn 标识 -->
+          <div
+            v-if="item.message.notificationSource && item.message.role === 'model'"
+            class="notification-turn-badge"
+          >
+            <span class="notification-turn-icon">&#9881;</span>
+            <span>后台任务: {{ item.message.notificationSource.description }}</span>
+          </div>
           <template v-for="(part, j) in item.message.parts" :key="`${item.key}-${j}`">
             <MessageBubble
               v-if="part.type === 'text' && part.text?.trim() && !isInternalMarker(part.text ?? '')"

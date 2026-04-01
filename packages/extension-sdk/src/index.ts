@@ -23,6 +23,7 @@ export {
 } from './platform.js';
 
 export type {
+  AgentTaskInfoLike,
   DocumentInput,
   ImageInput,
   AgentContextLike,

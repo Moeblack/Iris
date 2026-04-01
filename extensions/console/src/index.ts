@@ -302,6 +302,27 @@ export class ConsolePlatform extends PlatformAdapter {
     this.backend.on('done', (sid: string, durationMs: number) => {
       if (sid === this.sessionId) {
         this.appHandle?.finalizeResponse(durationMs);
+        this.appHandle?.clearNotificationContext();
+      }
+    });
+
+    // 监听 turn:start 区分 notification turn 和普通 turn
+    this.backend.on('turn:start' as any, (sid: string, _turnId: string, mode: string) => {
+      if (sid === this.sessionId) {
+        if (mode === 'task-notification') {
+          this.appHandle?.setNotificationContext();
+        } else {
+          // 普通 chat turn：清除可能残留的 notification context
+          // （例如切换 session 后残留的旧状态）
+          this.appHandle?.clearNotificationContext();
+        }
+      }
+    });
+
+    // 监听 agent:notification 获取任务描述（在 turn:start 之前触发）
+    this.backend.on('agent:notification' as any, (sid: string, _taskId: string, status: string, summary: string) => {
+      if (sid === this.sessionId && (status === 'completed' || status === 'failed' || status === 'killed')) {
+        this.appHandle?.setNotificationContext(summary);
       }
     });
 

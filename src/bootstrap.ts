@@ -233,6 +233,9 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
     asyncSubAgents: asyncSubAgentsEnabled,
   }, modeRegistry);
 
+  // 将任务注册表注入 Backend，使 registry 生命周期事件转发为 BackendEvents
+  backend.setAgentTaskRegistry(agentTaskRegistry);
+
   // 注册子代理工具（需要 backend 引用；无类型定义时跳过）
   if (hasSubAgents) {
     tools.register(createSubAgentTool({

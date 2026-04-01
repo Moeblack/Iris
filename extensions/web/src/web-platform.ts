@@ -36,6 +36,7 @@ import { createExtensionHandlers } from './handlers/extensions';
 import { assertManagementToken } from './security/management';
 import { formatContent, formatMessages } from './message-format';
 import { createTerminalHandler, type TerminalHandler } from './handlers/terminal';
+import { createNotificationHandler, type NotificationHandler } from './handlers/notifications';
 
 const logger = createExtensionLogger('WebPlatform');
 
@@ -115,6 +116,9 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
   /** 终端 WebSocket 处理器 */
   private terminalHandler: TerminalHandler;
 
+  /** 通知 WebSocket 处理器（异步子代理事件推送） */
+  private notificationHandler: NotificationHandler;
+
   /** Agent 热重载回调：给定 agent 定义，返回 bootstrap 结果 */
   private reloadHandler?: (agent: AgentDefinitionLike | '__default__') => Promise<any>;
 
@@ -145,6 +149,7 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
     this.setupRoutes();
     this.deployToken = crypto.randomBytes(16).toString('hex');
     this.terminalHandler = createTerminalHandler(this.deps.isCompiledBinary, this.deps.projectRoot);
+    this.notificationHandler = createNotificationHandler();
   }
 
   /** 解析 public 目录路径 */
@@ -431,6 +436,17 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
             }
           }
           this.terminalHandler.handleUpgrade(req, socket, head);
+        } else if (upgradeUrl.pathname === '/ws/notifications') {
+          // 通知 WebSocket — 异步子代理事件推送
+          if (this.config.authToken) {
+            const token = upgradeUrl.searchParams.get('token') ?? '';
+            if (token !== this.config.authToken) {
+              socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+              socket.destroy();
+              return;
+            }
+          }
+          this.notificationHandler.handleUpgrade(req, socket, head);
         } else {
           socket.destroy();
         }
@@ -444,6 +460,7 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
         } else {
           logger.warn('node-pty 不可用，终端功能已禁用');
         }
+        logger.info('通知 WebSocket 已就绪: /ws/notifications');
         resolve();
       });
     });
@@ -451,6 +468,7 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
 
   async stop(): Promise<void> {
     this.terminalHandler.killAll();
+    this.notificationHandler.close();
 
     for (const [, res] of this.pendingResponses) {
       if (!res.writableEnded) res.end();
@@ -553,6 +571,20 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
     const onUserToken = (sid: string, tokenCount: number) => {
       this.writeSSE(sid, { type: 'user_token', tokenCount });
     };
+    const onAgentNotification = (sid: string, taskId: string, status: string, summary: string) => {
+      const data = { type: 'agent_notification', taskId, status, summary };
+      // agent:notification 走专用推送逻辑，避免 writeSSE fallthrough 导致 WS 重复发送。
+      // 有 SSE 时两个通道都推（SSE 给当前聊天流，WS 给全局任务面板）；
+      // 无 SSE 时只推 WS。
+      const res = this.pendingResponses.get(sid);
+      if (res && !res.writableEnded) {
+        this.writeSSE(sid, data);
+      }
+      this.notificationHandler.pushEvent(sid, data);
+    };
+    const onTurnStart = (sid: string, turnId: string, mode: string) => {
+      this.writeSSE(sid, { type: 'turn_start', turnId, mode });
+    };
 
     backend.on('response', onResponse);
     backend.on('stream:start', onStreamStart);
@@ -567,6 +599,8 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
     backend.on('retry', onRetry);
     backend.on('auto-compact', onAutoCompact);
     backend.on('user:token', onUserToken);
+    backend.on('agent:notification' as any, onAgentNotification);
+    backend.on('turn:start' as any, onTurnStart);
 
     // 记录清理函数，热重载时精确移除这些监听器而不影响其他平台
     if (agentName) {
@@ -584,6 +618,8 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
         backend.off!('retry', onRetry);
         backend.off!('auto-compact', onAutoCompact);
         backend.off!('user:token', onUserToken);
+        backend.off!('agent:notification' as any, onAgentNotification);
+        backend.off!('turn:start' as any, onTurnStart);
       });
     }
   }
@@ -593,7 +629,11 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
 
   private writeSSE(sessionId: string, data: any): void {
     const res = this.pendingResponses.get(sessionId);
-    if (!res || res.writableEnded) return;
+    if (!res || res.writableEnded) {
+      // 无活跃 SSE 连接（空闲时 notification turn），回退到 WebSocket 推送
+      this.notificationHandler.pushEvent(sessionId, data);
+      return;
+    }
     const count = (this.sseWriteCount.get(sessionId) ?? 0) + 1;
     this.sseWriteCount.set(sessionId, count);
     const ok = res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -912,6 +952,20 @@ export class WebPlatform extends PlatformAdapter implements MultiAgentCapable {
       } catch (err: unknown) {
         sendJSON(res, 500, { error: err instanceof Error ? err.message : '重做失败' });
       }
+    });
+
+    // 异步子代理任务查询 API
+    this.router.get('/api/sessions/:id/tasks', async (req, res, params) => {
+      const { backend } = this.resolveAgent(req);
+      const tasks = backend.getAgentTasks?.(params.id) ?? [];
+      sendJSON(res, 200, { tasks: tasks.map(t => ({
+        taskId: t.taskId,
+        sessionId: t.sessionId,
+        description: t.description,
+        status: t.status,
+        startTime: t.startTime,
+        endTime: t.endTime,
+      })) });
     });
 
     // Shell 命令 API

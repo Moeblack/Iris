@@ -29,6 +29,10 @@ export interface AppHandle {
   setUsage(usage: UsageMetadata): void;
   setRetryInfo(info: RetryInfo | null): void;
   finalizeResponse(durationMs: number): void;
+  /** 标记下一个 turn 为 notification turn（由平台在 turn:start 事件中调用） */
+  setNotificationContext(description?: string): void;
+  /** 清除 notification turn 标记（由平台在 done 事件中调用） */
+  clearNotificationContext(): void;
   /**
    * 从消息队列中出队下一条消息。
    * 由 App 组件通过 drainCallbackRef 注册实际实现。
@@ -72,6 +76,8 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uncommittedStreamPartsRef = useRef<MessagePart[]>([]);
   const lastUsageRef = useRef<UsageMetadata | null>(null);
+  /** 当前是否处于 notification turn（由 turn:start 设置，done 清除） */
+  const notificationContextRef = useRef<{ active: boolean; description?: string }>({ active: false });
 
   const commitTools = useCallback(() => {
     toolInvocationsRef.current = [];
@@ -123,10 +129,17 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
         uncommittedStreamPartsRef.current = [];
         streamPartsRef.current = [];
         setStreamingParts([]);
+        const isNotif = notificationContextRef.current.active;
+        const notifDesc = notificationContextRef.current.description;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === 'assistant') return prev;
-          return [...prev, { id: nextMsgId(), role: 'assistant', parts: [] }];
+          return [...prev, {
+            id: nextMsgId(),
+            role: 'assistant',
+            parts: [],
+            ...(isNotif ? { isNotification: true, notificationDescription: notifDesc } : {}),
+          }];
         });
       },
       pushStreamParts(parts) {
@@ -152,19 +165,22 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
         uncommittedStreamPartsRef.current = [];
         setStreamingParts([]);
         setIsStreaming(false);
+        const isNotif = notificationContextRef.current.active;
+        const notifDesc = notificationContextRef.current.description;
+        const notifMeta = isNotif ? { isNotification: true as const, notificationDescription: notifDesc } : {};
         setMessages((prev) => {
           if (normalizedParts.length === 0 && !meta) return prev;
           const last = prev[prev.length - 1];
           if (normalizedParts.length === 0) {
             if (!last || last.role !== 'assistant') return prev;
             const copy = [...prev];
-            copy[copy.length - 1] = { ...last, ...meta };
+            copy[copy.length - 1] = { ...last, ...meta, ...notifMeta };
             return copy;
           }
-          if (prev.length === 0) return [{ id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta }];
-          if (last.role !== 'assistant') return [...prev, { id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta }];
+          if (prev.length === 0) return [{ id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta, ...notifMeta }];
+          if (last.role !== 'assistant') return [...prev, { id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta, ...notifMeta }];
           const copy = [...prev];
-          copy[copy.length - 1] = { ...last, parts: mergeMessageParts([...last.parts, ...normalizedParts]), ...meta };
+          copy[copy.length - 1] = { ...last, parts: mergeMessageParts([...last.parts, ...normalizedParts]), ...meta, ...notifMeta };
           return copy;
         });
       },
@@ -258,6 +274,17 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
       },
       setRetryInfo(info) {
         setRetryInfo(info);
+      },
+      setNotificationContext(description?: string) {
+        // 保留已有的 description（agent:notification 先于 turn:start 触发，
+        // turn:start 不带 description 时不应覆盖）
+        notificationContextRef.current = {
+          active: true,
+          description: description ?? notificationContextRef.current.description,
+        };
+      },
+      clearNotificationContext() {
+        notificationContextRef.current = { active: false };
       },
       drainQueue() {
         return drainCallbackRef.current?.() ?? undefined;
