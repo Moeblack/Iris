@@ -33,6 +33,15 @@ export interface AppHandle {
   setNotificationContext(description?: string): void;
   /** 清除 notification turn 标记（由平台在 done 事件中调用） */
   clearNotificationContext(): void;
+  /** 更新后台运行中的异步子代理数量（由平台监听 agent:notification 事件后调用） */
+  updateBackgroundTaskCount(delta: number): void;
+  /**
+   * 更新指定后台任务的 token 计数（由平台监听 agent:notification token-update 事件后调用）。
+   * taskId=null 且 tokens=0 时表示清除已结束任务的记录。
+   */
+  updateBackgroundTaskTokens(taskId: string, tokens: number): void;
+  /** 移除已结束任务的 token 记录 */
+  removeBackgroundTaskTokens(taskId: string): void;
   /**
    * 从消息队列中出队下一条消息。
    * 由 App 组件通过 drainCallbackRef 注册实际实现。
@@ -57,6 +66,10 @@ export interface UseAppHandleReturn {
   retryInfo: RetryInfo | null;
   pendingApprovals: ToolInvocation[];
   pendingApplies: ToolInvocation[];
+  /** 当前后台运行中的异步子代理数量 */
+  backgroundTaskCount: number;
+  /** 所有后台运行中的异步子代理的 token 总数 */
+  backgroundTaskTokens: number;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   commitTools: () => void;
 }
@@ -70,6 +83,10 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
   const [retryInfo, setRetryInfo] = useState<RetryInfo | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ToolInvocation[]>([]);
   const [pendingApplies, setPendingApplies] = useState<ToolInvocation[]>([]);
+  const [backgroundTaskCount, setBackgroundTaskCount] = useState(0);
+  // 各后台任务的 token 计数（key=taskId, value=tokens），汇总后作为 backgroundTaskTokens 展示
+  const backgroundTaskTokenMapRef = useRef<Map<string, number>>(new Map());
+  const [backgroundTaskTokens, setBackgroundTaskTokens] = useState(0);
 
   const streamPartsRef = useRef<MessagePart[]>([]);
   const toolInvocationsRef = useRef<ToolInvocation[]>([]);
@@ -286,6 +303,24 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
       clearNotificationContext() {
         notificationContextRef.current = { active: false };
       },
+      updateBackgroundTaskCount(delta: number) {
+        // delta > 0 表示新增后台任务（registered），delta < 0 表示任务结束（completed/failed/killed）
+        setBackgroundTaskCount((prev) => Math.max(0, prev + delta));
+      },
+      updateBackgroundTaskTokens(taskId: string, tokens: number) {
+        // 更新指定任务的 token 数，并重新汇总所有任务的总 token 数
+        backgroundTaskTokenMapRef.current.set(taskId, tokens);
+        let total = 0;
+        for (const v of backgroundTaskTokenMapRef.current.values()) total += v;
+        setBackgroundTaskTokens(total);
+      },
+      removeBackgroundTaskTokens(taskId: string) {
+        // 任务结束后移除该任务的 token 记录
+        backgroundTaskTokenMapRef.current.delete(taskId);
+        let total = 0;
+        for (const v of backgroundTaskTokenMapRef.current.values()) total += v;
+        setBackgroundTaskTokens(total);
+      },
       drainQueue() {
         return drainCallbackRef.current?.() ?? undefined;
       },
@@ -303,6 +338,8 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
     retryInfo,
     pendingApprovals,
     pendingApplies,
+    backgroundTaskCount,
+    backgroundTaskTokens,
     setMessages,
     commitTools,
   };

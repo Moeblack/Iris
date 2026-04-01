@@ -229,11 +229,19 @@ export class Backend extends EventEmitter {
     registry.on('failed', onFailed);
     registry.on('killed', onKilled);
 
+    // 转发异步子代理的实时 token 更新事件。
+    // 平台层（如 Console StatusBar）通过此事件展示后台任务的 token 消耗。
+    const onTokenUpdate = (task: AgentTask) => {
+      this.emit('agent:notification', task.sessionId, task.taskId, 'token-update', String(task.totalTokens ?? 0));
+    };
+    registry.on('token-update', onTokenUpdate);
+
     this.agentTaskRegistryCleanup = () => {
       registry.off('registered', onRegistered);
       registry.off('completed', onCompleted);
       registry.off('failed', onFailed);
       registry.off('killed', onKilled);
+      registry.off('token-update', onTokenUpdate);
     };
   }
 

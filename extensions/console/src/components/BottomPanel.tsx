@@ -27,6 +27,10 @@ interface BottomPanelProps {
   contextWindow?: number;
   copyMode: boolean;
   exitConfirmArmed: boolean;
+  /** 当前后台运行中的异步子代理数量 */
+  backgroundTaskCount?: number;
+  /** 所有后台任务的累计 token 数 */
+  backgroundTaskTokens?: number;
 }
 
 export function BottomPanel({
@@ -46,6 +50,8 @@ export function BottomPanel({
   contextWindow,
   copyMode,
   exitConfirmArmed,
+  backgroundTaskCount,
+  backgroundTaskTokens,
 }: BottomPanelProps) {
   // 输入框仅在审批/确认对话框期间完全禁用
   const inputDisabled = !!(pendingConfirm || pendingApprovals.length > 0);
@@ -82,6 +88,8 @@ export function BottomPanel({
             contextTokens={contextTokens}
             contextWindow={contextWindow}
             queueSize={queueSize}
+            backgroundTaskCount={backgroundTaskCount}
+            backgroundTaskTokens={backgroundTaskTokens}
           />
         </box>
       )}

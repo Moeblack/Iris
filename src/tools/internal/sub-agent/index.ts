@@ -374,7 +374,14 @@ async function runSubAgentAsync(
             for (const fc of chunk.functionCalls) appendMergedPart(parts, fc, Date.now());
           }
         }
-        if (chunk.usageMetadata) usageMetadata = chunk.usageMetadata;
+        if (chunk.usageMetadata) {
+          usageMetadata = chunk.usageMetadata;
+          // 实时更新后台任务的 token 计数，供平台层 StatusBar 展示
+          const tokens = usageMetadata.totalTokenCount ?? usageMetadata.candidatesTokenCount ?? 0;
+          if (tokens > 0) {
+            deps.agentTaskRegistry?.updateTokens(taskId, tokens);
+          }
+        }
       }
       if (parts.length === 0) parts.push({ text: '' });
       const content: Content = { role: 'model', parts, createdAt: Date.now() };

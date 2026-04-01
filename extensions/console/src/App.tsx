@@ -279,6 +279,8 @@ export function App({
         contextWindow={modelState.currentContextWindow}
         copyMode={copyMode}
         exitConfirmArmed={exitConfirm.exitConfirmArmed}
+        backgroundTaskCount={appState.backgroundTaskCount}
+        backgroundTaskTokens={appState.backgroundTaskTokens}
       />
     </box>
   );

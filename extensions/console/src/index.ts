@@ -321,8 +321,24 @@ export class ConsolePlatform extends PlatformAdapter {
 
     // 监听 agent:notification 获取任务描述（在 turn:start 之前触发）
     this.backend.on('agent:notification' as any, (sid: string, _taskId: string, status: string, summary: string) => {
-      if (sid === this.sessionId && (status === 'completed' || status === 'failed' || status === 'killed')) {
-        this.appHandle?.setNotificationContext(summary);
+      if (sid === this.sessionId) {
+        // 更新 StatusBar 中的后台任务计数：
+        // registered → 新任务启动，计数 +1
+        // completed / failed / killed → 任务结束，计数 -1
+        // token-update → 实时更新后台任务的 token 消耗
+        if (status === 'registered') {
+          this.appHandle?.updateBackgroundTaskCount(1);
+        } else if (status === 'completed' || status === 'failed' || status === 'killed') {
+          this.appHandle?.updateBackgroundTaskCount(-1);
+          this.appHandle?.removeBackgroundTaskTokens(_taskId);
+          this.appHandle?.setNotificationContext(summary);
+        } else if (status === 'token-update') {
+          // summary 字段携带 token 数值字符串（由 Backend 转发时填入）
+          const tokens = parseInt(summary, 10);
+          if (!isNaN(tokens)) {
+            this.appHandle?.updateBackgroundTaskTokens(_taskId, tokens);
+          }
+        }
       }
     });
 

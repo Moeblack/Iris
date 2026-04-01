@@ -39,6 +39,8 @@ export interface AgentTask {
   result?: string;
   /** 错误信息（failed 时有值） */
   error?: string;
+  /** 累计输出 token 数（异步子代理运行时实时更新） */
+  totalTokens?: number;
 }
 
 /** 任务 ID 生成计数器 */
@@ -116,6 +118,20 @@ export class AgentTaskRegistry extends EventEmitter {
     task.abortController = undefined;
     logger.info(`任务已中止: taskId=${taskId}`);
     this.emit('killed', task);
+  }
+
+  /**
+   * 更新任务的累计 token 数（运行中实时更新）。
+   * 由异步子代理的流式处理回调调用，每次 LLM 返回 usageMetadata 时触发。
+   */
+  updateTokens(taskId: string, tokens: number): void {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== 'running') return;
+    task.totalTokens = tokens;
+    // 发射 token-update 事件，携带 sessionId 和 taskId，
+    // 供 Backend 转发给平台层实时展示。
+    // 使用节流避免过于频繁（由调用方控制，此处不做节流）。
+    this.emit('token-update', task);
   }
 
   /**
