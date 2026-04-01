@@ -375,6 +375,12 @@ export class Backend extends EventEmitter {
   }
 
   async undo(sessionId: string, scope: UndoScope = 'last-turn'): Promise<UndoOperationResult | null> {
+    // 当该 session 正在执行 turn（包括 notification turn）时，拒绝 undo。
+    // 目的：防止 undo 的 truncateHistory 与 turn 中的 addMessage/updateLastMessage
+    // 交错执行，导致 history 数据损坏。
+    // 平台层的 busy 标志在 notification turn 期间为 false，无法可靠拦截，
+    // 所以在 Backend 层用 turnLock 做最终守卫。
+    if (this.turnLock.isActive(sessionId)) return null;
     const history = await this.storage.getHistory(sessionId);
     const range = this.undoRedo.resolveUndoRange(history, scope);
     if (!range) return null;
@@ -394,6 +400,8 @@ export class Backend extends EventEmitter {
   }
 
   async redo(sessionId: string): Promise<RedoOperationResult | null> {
+    // 与 undo 同理：turn 执行期间拒绝 redo，防止并发写入 history。
+    if (this.turnLock.isActive(sessionId)) return null;
     const restored = this.undoRedo.popRedoGroup(sessionId);
     if (!restored) return null;
 
