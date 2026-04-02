@@ -120,3 +120,62 @@ async function* shellHandler(args) {
 ```
 
 前端 ToolCall 组件从 `invocation.progress` 读取进度数据，根据工具名称渲染不同的 UI。
+
+## 架构演进：从 Generator 到 ToolExecutionContext
+
+日期：2025-07-10（第二次迭代）
+
+### 问题
+
+Generator + 轮询方案有两个固有瓶颈：
+
+1. **500ms 轮询延迟**：onChunk/onTokens 回调只能更新闭包计数器，generator 每 500ms 才轮询一次
+2. **scheduler 4x 节流叠加**：scheduler 每 4 个 yield 才推送一次 progress，总延迟约 2000ms
+3. **代码复杂度高**：done 标志、runPromise.then hack、定时器循环，约 80 行样板代码
+
+异步子代理不受此限制——它的 onChunk/onTokens 回调直接调用 AgentTaskRegistry.emit，每个 chunk 即时更新。
+
+### 新方案：ToolExecutionContext
+
+参考 FastMCP 的 `Context.report_progress` 模式和 LangChain PR #10102 的回调错误隔离设计。
+
+核心思想：scheduler 创建一个 `ToolExecutionContext` 对象（含带节流的 `reportProgress` 回调），通过 `registry.execute(name, args, context)` 传入 handler。handler 在 onChunk/onTokens 回调中直接调用 `reportProgress`，无需 generator。
+
+```
+scheduler.executeSingle
+  → 创建 context = { reportProgress: 150ms 节流闭包, signal }
+  → registry.execute(name, args, context)
+    → handler(args, context)
+      → onChunk 回调: context.reportProgress({ tokens, frame })
+  → handler 完成 → dispose() 刷新最后值 → transition(success)
+```
+
+同步子代理的 onChunk/onTokens 回调与异步子代理调用 `AgentTaskRegistry.emitChunkHeartbeat` / `updateTokens` 的时机完全对齐，都是每收到一个 LLM chunk 立即触发。
+
+### 节流策略
+
+scheduler 层 150ms leading+trailing 节流（`createThrottledReportProgress`）：
+- 首次调用立即推送（leading edge）
+- 150ms 窗口内后续调用合并，窗口结束推送最新值（trailing edge）
+- `dispose()` 时刷新最后的待推送值，确保终态前进度数据完整
+- 自写实现，不引入外部依赖（规避 lodash throttle leading/trailing 交互 bug #4471）
+
+### 错误隔离
+
+`reportProgress` 内部 try-catch 包裹 `toolState.transition()`。transition 失败不冒泡到 onChunk 回调，不中断 LLM 流式读取循环。`dispose()` 中的 flush 同样有 try-catch 保护。
+
+### 向后兼容
+
+- `ToolHandler` 第二个参数 `context?` 可选，现有工具忽略即可，零改动
+- generator 迭代路径在 scheduler 中保留，两种进度机制共存
+- generator 适合控制流线性的工具（如逐行输出的 shell），reportProgress 适合回调驱动的工具（如子代理）
+
+### 改动文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `src/types/tool.ts` | 新增 `ToolExecutionContext` 接口；`ToolHandler` 签名加第二参数 |
+| `packages/extension-sdk/src/tool.ts` | 同步类型定义 |
+| `src/tools/registry.ts` | `execute()` 透传 context |
+| `src/tools/scheduler.ts` | 新增 `createThrottledReportProgress`；`executeSingle` 创建 context 并在终态前 dispose |
+| `src/tools/internal/sub-agent/index.ts` | 同步路径从 generator 改为普通 async 函数 + reportProgress |

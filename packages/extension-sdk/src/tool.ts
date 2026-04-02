@@ -37,7 +37,18 @@ export interface ToolInvocation {
   progress?: Record<string, unknown>;
 }
 
-export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown> | AsyncIterable<unknown>;
+/**
+ * 工具执行上下文。
+ * 由 scheduler 创建并传入 handler，提供进度上报和中止信号。
+ */
+export interface ToolExecutionContext {
+  /** 上报实时进度，scheduler 内部做节流处理 */
+  reportProgress?: (data: Record<string, unknown>) => void;
+  /** 中止信号 */
+  signal?: AbortSignal;
+}
+
+export type ToolHandler = (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<unknown> | AsyncIterable<unknown>;
 export type ToolParallelResolver = (args: Record<string, unknown>) => boolean;
 export type ToolParallelPolicy = boolean | ToolParallelResolver;
 

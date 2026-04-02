@@ -84,6 +84,7 @@ export type {
 export type {
   FunctionDeclaration,
   ToolDefinition,
+  ToolExecutionContext,
   ToolHandler,
   ToolInvocation,
   ToolParallelPolicy,

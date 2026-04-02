@@ -15,7 +15,7 @@
  */
 
 import { ToolDefinition } from '../../../types';
-import type { Content, Part, LLMRequest, UsageMetadata } from '../../../types';
+import type { Content, Part, LLMRequest, UsageMetadata, ToolExecutionContext } from '../../../types';
 import { appendMergedPart } from '../../../core/backend/stream';
 import { ToolPolicyConfig } from '../../../config';
 import { LLMRouter } from '../../../llm/router';
@@ -227,9 +227,9 @@ ${typeDescriptions}
       parameters: { type: 'object', properties, required: ['prompt'] },
     },
     parallel: (args) => deps.subAgentTypes.get(getSubAgentTypeName(args))?.parallel === true,
-    // handler 返回 Promise（异步路径）或 AsyncIterable（同步路径）。
-    // scheduler 自动检测返回类型，AsyncIterable 走 generator 迭代路径。
-    handler: async (args) => {
+    // handler 返回 Promise。异步路径立即返回 async_launched，
+    // 同步路径通过 context.reportProgress 推送实时进度。
+    handler: async (args, context?) => {
       const prompt = args.prompt as string;
       const typeName = getSubAgentTypeName(args);
       const contextText = typeof args.context === 'string' && args.context.trim() ? args.context.trim() : undefined;
@@ -312,23 +312,18 @@ ${typeDescriptions}
       }
 
       // ---- 同步路径 ----
-      // 返回 AsyncIterable（generator），yield 中间进度值，
-      // scheduler 自动检测并迭代消费，推送到 ToolStateManager.progress。
+      // 返回 Promise（普通异步函数），通过 context.reportProgress 直接推送进度。
+      // 取代原来的 generator + 500ms 轮询模式，与异步子代理的实时更新频率对齐。
+      // onChunk/onTokens 回调每次触发时直接调用 reportProgress，
+      // 由 scheduler 层的节流机制（150ms leading+trailing）控制推送频率。
       const syncLabel = `sync_${typeName}`;
       logger.info(`创建子代理: type=${typeName} depth=${currentDepth + 1}/${deps.maxDepth} 工具数=${subTools.size}`);
 
-      // 返回 async generator：yield 进度 → scheduler 推送到 ToolStateManager.progress → 前端渲染
-      // 采用「回调更新共享状态 + 定时 yield」模式：
-      //   1. createStreamingLLMCaller 的 onChunk/onTokens 回调更新 frame/tokens 计数器
-      //   2. generator 每 500ms yield 一次进度快照 { tokens, frame }
-      //   3. ToolLoop.run 完成后 yield 最终结果 { result: text }
-      //   4. scheduler 的 for-await-of 每次 yield 都把中间值写入 ToolStateManager.progress
-      async function* runSyncSubAgent(): AsyncIterable<unknown> {
+      // 在 agentContext 内执行，确保子代理内部所有模块的日志携带正确前缀
+      return agentContext.run(syncLabel, async () => {
         let frame = 0;
         let tokens = 0;
 
-        // typeConfig 在 handler 顶部已做 if (!typeConfig) return error 检查，
-        // 但 TypeScript 的类型缩窄不跨越函数边界，此处用 ! 断言安全。
         const tc = typeConfig!;
         const subPrompt = new PromptAssembler();
         subPrompt.setSystemPrompt(tc.systemPrompt);
@@ -339,57 +334,27 @@ ${typeDescriptions}
           maxRetries: deps.maxRetries,
         });
 
-        // 回调只更新共享计数器，不直接 yield（回调不在 generator 上下文中）
+        // onChunk/onTokens 回调直接调用 reportProgress 推送进度，
+        // 与异步子代理调用 AgentTaskRegistry.emitChunkHeartbeat/updateTokens 的时机对齐。
+        const reportProgress = context?.reportProgress;
         const callLLM = createStreamingLLMCaller(
           deps, tc,
-          () => { frame++; },
-          (t) => { tokens = t; },
+          () => { frame++; reportProgress?.({ tokens, frame }); },
+          (t) => { tokens = t; reportProgress?.({ tokens, frame }); },
         );
 
-        // 启动 ToolLoop（不 await，让 generator 可以同时 yield 进度）
-        const runPromise = loop.run(
+        const runResult = await loop.run(
           [{ role: 'user', parts: [{ text: fullPrompt }] }],
           callLLM,
           { modelName: tc.modelName },
         );
 
-        // 定期 yield 进度，直到 run 完成
-        let done = false;
-        let runResult: Awaited<ReturnType<typeof loop.run>> | undefined;
-        let runError: unknown;
-
-        runPromise.then(
-          (r) => { runResult = r; done = true; },
-          (e) => { runError = e; done = true; },
-        );
-
-        // 每 500ms yield 一次进度快照
-        while (!done) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if (!done) {
-            yield { tokens, frame };
-          }
-        }
-
-        // 最终 yield（确保最后的 token 数被记录）
-        yield { tokens, frame };
-
-        if (runError) {
-          throw runError instanceof Error ? runError : new Error(String(runError));
-        }
-
-        if (runResult!.error) {
-          throw new Error(runResult!.error);
+        if (runResult.error) {
+          throw new Error(runResult.error);
         }
 
         logger.info(`子代理完成: type=${typeName}`);
-        // 最后一个 yield 的值是最终结果（scheduler 取最后一个值作为 result）
-        yield { result: runResult!.text };
-      }
-
-      // 在 agentContext 内启动 generator，确保日志前缀正确
-      return agentContext.run(syncLabel, () => {
-        return runSyncSubAgent();
+        return { result: runResult.text };
       }) as unknown;
     },
   };

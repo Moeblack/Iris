@@ -3,13 +3,13 @@ import React9 from "react";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 
-// ../../packages/extension-sdk/dist/platform.js
+// ../../node_modules/@irises/extension-sdk/dist/platform.js
 class PlatformAdapter {
   get name() {
     return this.constructor.name;
   }
 }
-// ../../packages/extension-sdk/dist/logger.js
+// ../../node_modules/@irises/extension-sdk/dist/logger.js
 var LogLevel;
 (function(LogLevel2) {
   LogLevel2[LogLevel2["DEBUG"] = 0] = "DEBUG";
@@ -2225,7 +2225,7 @@ import { useMemo as useMemo3 } from "react";
 import * as fs2 from "fs";
 import * as path2 from "path";
 
-// ../../packages/extension-sdk/dist/tool-utils.js
+// ../../node_modules/@irises/extension-sdk/dist/tool-utils.js
 import * as fs from "node:fs";
 import * as path from "node:path";
 function normalizeLineEndings(text) {

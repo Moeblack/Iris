@@ -21,7 +21,7 @@ import type { ToolParameterSchema } from './coerce-args';
 import { validateToolArgs } from './validate-args';
 import { FunctionCallPart, FunctionResponsePart, InlineDataPart } from '../types';
 import { createLogger } from '../logger';
-import type { ToolAttachment } from '../types';
+import type { ToolAttachment, ToolExecutionContext } from '../types';
 import { ToolPolicyConfig, ToolsConfig } from '../config';
 import type { BeforeToolExecInterceptor, AfterToolExecInterceptor } from '../extension';
 
@@ -204,6 +204,74 @@ export function buildExecutionPlan(
 // ============ 执行 ============
 
 /**
+ * 创建带节流的进度上报函数。
+ *
+ * leading + trailing 模式（150ms 默认间隔）：
+ * - 首次调用立即推送（leading edge），用户立刻看到反馈
+ * - 150ms 窗口内后续调用合并，窗口结束时推送最新值（trailing edge）
+ * - dispose() 刷新最后一个待推送值并停止接受新调用
+ *
+ * 错误隔离：内部 try-catch 包裹 toolState.transition()，
+ * 防止错误冒泡到 handler 的 onChunk/onTokens 回调中
+ * 中断 LLM 流式读取循环（参考 LangChain PR #10102 的错误隔离设计）。
+ */
+function createThrottledReportProgress(
+  toolState: ToolStateManager,
+  invocationId: string,
+  intervalMs: number = 150,
+): { reportProgress: (data: Record<string, unknown>) => void; dispose: () => void } {
+  let lastFlushTime = 0;
+  let pendingData: Record<string, unknown> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+
+  /** 将 pendingData 推送到 ToolStateManager */
+  const flush = () => {
+    if (!pendingData) return;
+    try {
+      toolState.transition(invocationId, 'executing', { progress: pendingData });
+    } catch {
+      // 错误隔离：transition 失败（如状态已终态）不应影响工具执行
+    }
+    pendingData = null;
+  };
+
+  /** handler 调用此函数推送进度 */
+  const reportProgress = (data: Record<string, unknown>) => {
+    if (disposed) return;
+    pendingData = data;
+
+    const now = Date.now();
+    const elapsed = now - lastFlushTime;
+
+    if (elapsed >= intervalMs) {
+      // leading edge：超过节流间隔，立即推送
+      lastFlushTime = now;
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush();
+    } else if (!timer) {
+      // trailing edge：间隔内首次调用，调度延迟推送
+      timer = setTimeout(() => {
+        timer = null;
+        lastFlushTime = Date.now();
+        flush();
+      }, intervalMs - elapsed);
+    }
+    // else: timer 已调度，pendingData 已更新为最新值，trailing 触发时会推送
+  };
+
+  /** 销毁：清除定时器，刷新最后的待推送数据，然后标记已销毁 */
+  const dispose = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    // 先 flush 再 disposed=true：确保最后一个进度值在终态转换前送达
+    flush();
+    disposed = true;
+  };
+
+  return { reportProgress, dispose };
+}
+
+/**
  * 执行单个工具调用。
  *
  * 当 autoApprove 为 false 时，先将状态切到 awaiting_approval 并阻塞，
@@ -357,16 +425,27 @@ async function executeSingle(
     } catch { /* 拦截器错误不阻止执行 */ }
   }
 
+    // 创建工具执行上下文：带节流的进度上报 + 中止信号。
+    // 仅在有 ToolStateManager 和 invocationId 时创建 reportProgress（CLI 等场景跳过）。
+    let progressCtx: ReturnType<typeof createThrottledReportProgress> | undefined;
+    if (toolState && invocationId) {
+      progressCtx = createThrottledReportProgress(toolState, invocationId);
+    }
+    const executionContext: ToolExecutionContext = {
+      reportProgress: progressCtx?.reportProgress,
+      signal,
+    };
+
   const execStart = Date.now();
   try {
     // 执行工具 handler，支持两种返回类型：
     // - Promise<unknown>：普通一次性返回（现有所有工具的默认行为）
-    // - AsyncIterable<unknown>：generator 模式，yield 中间值作为进度更新，
-    //   最后一个 yield 的值作为最终结果。
-    //   中间值会通过 ToolStateManager.transition(executing, {progress}) 推送到前端。
+    // - AsyncIterable<unknown>：generator 模式，yield 中间值作为进度更新
+    // 进度也可通过 executionContext.reportProgress 回调直接推送（回调驱动场景）。
+    // 两种机制是互斥的替代方案，不应在同一个工具中混用。
     // registry.execute 可能返回 Promise（async handler 包裹 generator 的情况）
     // 或直接返回 AsyncIterable。先 await 解包可能的 Promise 层。
-    const rawReturn = await registry.execute(toolName, effectiveArgs);
+    const rawReturn = await registry.execute(toolName, effectiveArgs, executionContext);
     let result: unknown;
 
     // 检测 AsyncIterable（async handler 返回 generator 时，await 后得到 generator 对象）
@@ -451,6 +530,10 @@ async function executeSingle(
       response = { result } as Record<string, unknown>;
     }
 
+    // 销毁进度上报：刷新最后一个待推送值，然后停止接受新调用。
+    // 必须在 transition 到终态之前调用，否则 trailing timer 可能在终态后
+    // 触发 executing → success/error 的非法状态转换。
+    progressCtx?.dispose();
     if (toolState && invocationId) {
       // 存储尽量轻量的结果。MCP 图片附件已经通过 onAttachments 旁路发送，
       // 这里不保留 Buffer，避免状态对象被大块二进制拖重。
@@ -468,6 +551,8 @@ async function executeSingle(
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     const durationMs = Date.now() - execStart;
+    // 销毁进度上报（防止 trailing timer 在终态后触发非法状态转换）
+    progressCtx?.dispose();
     if (toolState && invocationId) {
       toolState.transition(invocationId, 'error', { error: errorMsg });
     }

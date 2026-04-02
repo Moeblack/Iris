@@ -6,6 +6,7 @@
  */
 
 import { ToolDefinition, FunctionDeclaration } from '../types';
+import type { ToolExecutionContext } from '../types';
 import { createLogger } from '../logger';
 
 const logger = createLogger('ToolRegistry');
@@ -42,13 +43,15 @@ export class ToolRegistry {
    * 执行工具。
    * 返回值可能是 Promise<unknown>（普通工具）或 AsyncIterable<unknown>（generator 工具）。
    * 调用方（scheduler）负责检测并处理 AsyncIterable。
+   *
+   * @param context 工具执行上下文（可选），由 scheduler 创建，透传给 handler
    */
-  execute(name: string, args: Record<string, unknown>): Promise<unknown> | AsyncIterable<unknown> {
+  execute(name: string, args: Record<string, unknown>, context?: ToolExecutionContext): Promise<unknown> | AsyncIterable<unknown> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`工具未找到: ${name}`);
     }
-    return tool.handler(args);
+    return tool.handler(args, context);
 }
 
   /** 获取所有工具的函数声明（供 LLM 使用） */

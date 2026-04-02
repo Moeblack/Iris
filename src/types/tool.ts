@@ -68,16 +68,34 @@ export interface ToolStateChangeEvent {
 }
 
 /**
+ * 工具执行上下文。
+ *
+ * 由 scheduler 创建并传入 handler，提供进度上报和中止信号。
+ * handler 无需了解 ToolStateManager、invocation ID 或任何基础设施细节，
+ * 只需调用 reportProgress 即可推送实时进度到前端。
+ *
+ * 设计参考：FastMCP 的 Context.report_progress 模式。
+ */
+export interface ToolExecutionContext {
+  /**
+   * 上报实时进度。调用后进度数据会写入 ToolInvocation.progress，
+   * 通过 tool:update 事件推送到前端渲染。
+   * scheduler 内部做节流处理，handler 可高频调用而不会造成渲染压力。
+   * 未提供时（如 CLI 场景无 ToolStateManager）为 undefined。
+   */
+  reportProgress?: (data: Record<string, unknown>) => void;
+  /** 中止信号，handler 可用于检查是否需要提前终止 */
+  signal?: AbortSignal;
+}
+
+/**
  * 工具执行器类型。
  *
- * handler 可以返回以下两种类型之一：
- * - Promise<unknown>：普通一次性返回（现有所有工具的默认行为，完全向后兼容）
- * - AsyncIterable<unknown>：generator 模式，yield 中间值作为进度更新，
- *   最后一个 yield 的值作为最终结果。
- *   中间值会被推送到 ToolStateManager 的 progress 字段，
- *   通过 tool:update 事件实时转发到前端。
+ * handler 接收 args 和可选的 ToolExecutionContext。
+ * 返回 Promise<unknown>（普通工具）或 AsyncIterable<unknown>（generator 工具）。
+ * 已有工具无需关注第二个参数，完全向后兼容。
  */
-export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown> | AsyncIterable<unknown>;
+export type ToolHandler = (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<unknown> | AsyncIterable<unknown>;
 
 /** 按本次调用参数判定工具是否可并行执行 */
 export type ToolParallelResolver = (args: Record<string, unknown>) => boolean;
