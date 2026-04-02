@@ -39,7 +39,7 @@ type RowTarget =
   | { kind: 'modelProvider'; modelIndex: number }
   | { kind: 'modelField'; modelIndex: number; field: 'modelName' | 'modelId' | 'apiKey' | 'baseUrl' }
   | { kind: 'modelDefault'; modelIndex: number }
-  | { kind: 'systemField'; field: 'systemPrompt' | 'maxToolRounds' | 'stream' | 'retryOnError' | 'maxRetries' }
+  | { kind: 'systemField'; field: 'systemPrompt' | 'maxToolRounds' | 'stream' | 'retryOnError' | 'maxRetries' | 'logRequests' | 'maxAgentDepth' | 'defaultMode' | 'asyncSubAgents' }
   | { kind: 'toolPolicy'; toolIndex: number }
   | { kind: 'toolApprovalView'; toolIndex: number }
   | { kind: 'mcpField'; serverIndex: number; field: 'name' | 'enabled' | 'transport' | 'command' | 'args' | 'cwd' | 'url' | 'authHeader' | 'timeout' }
@@ -217,6 +217,10 @@ function buildRows(snapshot: ConsoleSettingsSnapshot, termWidth: number): Settin
   pushField('system.stream', 'general', 'System / Stream Output', boolText(snapshot.system.stream), { kind: 'systemField', field: 'stream' }, '空格切换。');
   pushField('system.retryOnError', 'general', 'System / 报错自动重试', boolText(snapshot.system.retryOnError), { kind: 'systemField', field: 'retryOnError' }, 'LLM 调用失败时自动重试，空格切换。');
   pushField('system.maxRetries', 'general', 'System / 最大重试次数', String(snapshot.system.maxRetries), { kind: 'systemField', field: 'maxRetries' }, '报错重试的最大次数（0-20），回车编辑。');
+  pushField('system.logRequests', 'general', 'System / 记录请求日志', boolText(snapshot.system.logRequests), { kind: 'systemField', field: 'logRequests' }, '将 LLM 请求/响应记录到日志文件，空格切换。');
+  pushField('system.maxAgentDepth', 'general', 'System / 最大代理深度', String(snapshot.system.maxAgentDepth), { kind: 'systemField', field: 'maxAgentDepth' }, '子代理最大嵌套深度（1-20），回车编辑。');
+  pushField('system.defaultMode', 'general', 'System / 默认模式', snapshot.system.defaultMode || '(未设置)', { kind: 'systemField', field: 'defaultMode' }, '启动时默认使用的模式（如 code），回车编辑。');
+  pushField('system.asyncSubAgents', 'general', 'System / 异步子代理', boolText(snapshot.system.asyncSubAgents), { kind: 'systemField', field: 'asyncSubAgents' }, '启用后子代理可在后台异步执行，主对话不阻塞。需在 sub_agents.yaml 中定义子代理类型。空格切换。');
 
   rows.push({ id: 'section.tools', kind: 'section', section: 'tools', label: `工具执行策略（${snapshot.toolPolicies.length}）` });
 
@@ -405,7 +409,11 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
     if (target.kind === 'systemField') {
       const rawValue = target.field === 'maxToolRounds' ? String(draft.system.maxToolRounds)
         : target.field === 'maxRetries' ? String(draft.system.maxRetries)
-        : target.field === 'stream' ? String(draft.system.stream) : draft.system.systemPrompt;
+        : target.field === 'maxAgentDepth' ? String(draft.system.maxAgentDepth)
+        : target.field === 'defaultMode' ? (draft.system.defaultMode ?? '')
+        : target.field === 'stream' ? String(draft.system.stream)
+        : draft.system.systemPrompt;
+
 
       const value = target.field === 'systemPrompt' ? escapeMultilineForInput(rawValue) : rawValue;
       setEditor({ target, label: `system.${target.field}`, value, hint: target.field === 'systemPrompt' ? '\\n 表示换行' : undefined });
@@ -462,6 +470,14 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         snapshot.system.retryOnError = !snapshot.system.retryOnError;
         return;
       }
+      if (target.kind === 'systemField' && target.field === 'logRequests') {
+        snapshot.system.logRequests = !snapshot.system.logRequests;
+        return;
+      }
+      if (target.kind === 'systemField' && target.field === 'asyncSubAgents') {
+        snapshot.system.asyncSubAgents = !snapshot.system.asyncSubAgents;
+        return;
+      }
 
       if (target.kind === 'toolApprovalView') {
         const tool = snapshot.toolPolicies[target.toolIndex];
@@ -491,6 +507,10 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       const parsed = Number(value.trim());
       if (!Number.isFinite(parsed) || parsed < 0 || parsed > 20) { setStatus('最大重试次数必须在 0 到 20 之间', 'error'); return; }
     }
+    if (editor.target.kind === 'systemField' && editor.target.field === 'maxAgentDepth') {
+      const parsed = Number(value.trim());
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) { setStatus('最大代理深度必须在 1 到 20 之间', 'error'); return; }
+    }
 
     if (editor.target.kind === 'mcpField' && editor.target.field === 'timeout') {
       const parsed = Number(value.trim());
@@ -514,6 +534,8 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         if (editor.target.field === 'systemPrompt') snapshot.system.systemPrompt = value;
         else if (editor.target.field === 'maxToolRounds') snapshot.system.maxToolRounds = Number(value.trim());
         else if (editor.target.field === 'maxRetries') snapshot.system.maxRetries = Number(value.trim());
+        else if (editor.target.field === 'maxAgentDepth') snapshot.system.maxAgentDepth = Number(value.trim());
+        else if (editor.target.field === 'defaultMode') snapshot.system.defaultMode = value.trim();
 
         return;
       }
@@ -653,7 +675,7 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
       return;
     }
     if (key.name === 'space' && selectedRow?.target) {
-      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && (selectedRow.target.field === 'stream' || selectedRow.target.field === 'retryOnError')) || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
+      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && (selectedRow.target.field === 'stream' || selectedRow.target.field === 'retryOnError' || selectedRow.target.field === 'logRequests' || selectedRow.target.field === 'asyncSubAgents')) || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
 
         applyToggle(selectedRow.target);
       } else if (selectedRow.target.kind === 'toolPolicy') {
@@ -669,7 +691,7 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         else handleAddModel();
         return;
       }
-      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && (selectedRow.target.field === 'stream' || selectedRow.target.field === 'retryOnError')) || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
+      if (selectedRow.target.kind === 'modelDefault' || selectedRow.target.kind === 'toolApprovalView' || (selectedRow.target.kind === 'systemField' && (selectedRow.target.field === 'stream' || selectedRow.target.field === 'retryOnError' || selectedRow.target.field === 'logRequests' || selectedRow.target.field === 'asyncSubAgents')) || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field === 'enabled')) {
         applyToggle(selectedRow.target);
         return;
       }
@@ -677,7 +699,7 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         applyCycle(selectedRow.target, 1);
         return;
       }
-      if (selectedRow.target.kind === 'modelField' || (selectedRow.target.kind === 'systemField' && selectedRow.target.field !== 'stream' && selectedRow.target.field !== 'retryOnError') || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field !== 'enabled' && selectedRow.target.field !== 'transport')) {
+      if (selectedRow.target.kind === 'modelField' || (selectedRow.target.kind === 'systemField' && selectedRow.target.field !== 'stream' && selectedRow.target.field !== 'retryOnError' && selectedRow.target.field !== 'logRequests' && selectedRow.target.field !== 'asyncSubAgents') || (selectedRow.target.kind === 'mcpField' && selectedRow.target.field !== 'enabled' && selectedRow.target.field !== 'transport')) {
         startEdit(selectedRow.target as Extract<RowTarget, { kind: 'modelField' | 'systemField' | 'mcpField' }>);
       }
 

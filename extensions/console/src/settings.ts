@@ -1,5 +1,43 @@
 /**
  * Console 设置中心的数据模型与控制器
+ *
+ * 当前已覆盖的配置项：
+ *   llm.yaml    — defaultModel, models.*.{provider, model, apiKey, baseUrl}
+ *   system.yaml — systemPrompt, maxToolRounds, stream, retryOnError, maxRetries,
+ *                 logRequests, maxAgentDepth, defaultMode, asyncSubAgents
+ *   tools.yaml  — 按工具的 autoApprove / showApprovalView（allowPatterns/denyPatterns 仅透传）
+ *   mcp.yaml    — servers.*.{name, enabled, transport, command, args, cwd, url, headers.Authorization, timeout}
+ *
+ * TODO: 以下配置项尚未加入 settings 界面，按优先级排列：
+ *
+ *  ▸ llm.yaml 模型高级字段
+ *     - models.*.contextWindow          上下文窗口大小
+ *     - models.*.supportsVision         是否支持图片输入
+ *     - models.*.autoSummaryThreshold   自动上下文压缩阈值
+ *     - models.*.requestBody            自定义请求体（temperature, maxOutputTokens 等）
+ *     - models.*.headers                自定义请求头
+ *     - models.*.promptCaching          Claude Prompt Caching 开关
+ *     - models.*.autoCaching            Claude 自动缓存
+ *     - summaryModel                    /compact 压缩用的模型
+ *     - rememberPlatformModel           记住各平台上次使用的模型
+ *
+ *  ▸ tools.yaml 高级配置
+ *     - shell.allowPatterns / denyPatterns  Shell 白名单/黑名单（数据模型已透传，缺编辑 UI）
+ *     - autoApproveAll                  全局自动批准开关
+ *     - disabledTools                   禁用工具列表
+ *     - limits.*                        各工具防御性参数（maxFiles, maxResults 等）
+ *
+ *  ▸ system.yaml 高级配置
+ *     - skills                          Skill 定义（内联提示词模块，结构较复杂）
+ *
+ *  ▸ 完全未覆盖的配置文件（需新增 section）
+ *     - platform.yaml                   平台类型与各平台参数（console/discord/telegram/web/...）
+ *     - modes.yaml                      自定义模式（description, systemPrompt, tools include/exclude）
+ *     - sub_agents.yaml                 子代理类型定义（enabled, stream, types.* 各项参数）
+ *     - summary.yaml                    上下文压缩提示词（systemPrompt, userPrompt）
+ *     - storage.yaml                    存储类型与路径（type, dir, dbPath）
+ *     - ocr.yaml                        OCR 配置（provider, apiKey, baseUrl, model）
+ *     - plugins.yaml                    插件列表（name, type, enabled, priority, config）
  */
 
 import type {
@@ -73,6 +111,10 @@ export interface ConsoleSettingsSnapshot {
     stream: boolean;
     retryOnError: boolean;
     maxRetries: number;
+    logRequests: boolean;
+    maxAgentDepth: number;
+    defaultMode: string;
+    asyncSubAgents: boolean;
   };
   toolPolicies: ConsoleToolPolicySettings[];
   mcpServers: ConsoleMCPServerSettings[];
@@ -176,6 +218,10 @@ function validateSnapshot(snapshot: ConsoleSettingsSnapshot): string | null {
 
   if (!Number.isFinite(snapshot.system.maxRetries) || snapshot.system.maxRetries < 0 || snapshot.system.maxRetries > 20) {
     return '最大重试次数必须在 0 到 20 之间';
+  }
+
+  if (!Number.isFinite(snapshot.system.maxAgentDepth) || snapshot.system.maxAgentDepth < 1 || snapshot.system.maxAgentDepth > 20) {
+    return '最大代理深度必须在 1 到 20 之间';
   }
 
   if (!Array.isArray(snapshot.models) || snapshot.models.length === 0) {
@@ -359,6 +405,10 @@ export class ConsoleSettingsController {
         stream: system.stream !== false,
         retryOnError: system.retryOnError !== false,
         maxRetries: system.maxRetries ?? 3,
+        logRequests: system.logRequests === true,
+        maxAgentDepth: system.maxAgentDepth ?? 3,
+        defaultMode: system.defaultMode ?? '',
+        asyncSubAgents: system.asyncSubAgents === true,
       },
       toolPolicies: allToolNames.map(name => ({
         name,
@@ -408,6 +458,10 @@ export class ConsoleSettingsController {
         stream: draft.system.stream,
         retryOnError: draft.system.retryOnError,
         maxRetries: draft.system.maxRetries,
+        logRequests: draft.system.logRequests,
+        maxAgentDepth: draft.system.maxAgentDepth,
+        defaultMode: draft.system.defaultMode || null,
+        asyncSubAgents: draft.system.asyncSubAgents,
       },
       tools: draft.toolPolicies.reduce((result: Record<string, Record<string, unknown>>, tool) => {
         if (!tool.configured) {

@@ -1859,6 +1859,38 @@ function groupParts(parts) {
   }
   return groups;
 }
+function NotificationPayloadBlock({ payload }) {
+  const icon = payload.status === "completed" ? "✓" : payload.status === "failed" ? "✗" : "⊘";
+  const iconColor = payload.status === "completed" ? C.accent : C.error;
+  const content = payload.result || payload.error || "";
+  const firstLine = content.split(`
+`).filter((l) => l.trim())[0] || "";
+  const preview = firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
+  return /* @__PURE__ */ jsxDEV22("box", {
+    children: /* @__PURE__ */ jsxDEV22("text", {
+      children: [
+        /* @__PURE__ */ jsxDEV22("span", {
+          fg: iconColor,
+          children: icon
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV22("span", {
+          fg: C.text,
+          children: [
+            " ",
+            payload.description
+          ]
+        }, undefined, true, undefined, this),
+        preview ? /* @__PURE__ */ jsxDEV22("span", {
+          fg: C.dim,
+          children: [
+            " — ",
+            preview
+          ]
+        }, undefined, true, undefined, this) : null
+      ]
+    }, undefined, true, undefined, this)
+  }, undefined, false, undefined, this);
+}
 var MessageItem = React5.memo(function MessageItem2({ msg, liveTools, liveParts, isStreaming, modelName }) {
   const { width: termWidth } = useTerminalDimensions2();
   const isUser = msg.role === "user";
@@ -1902,6 +1934,50 @@ var MessageItem = React5.memo(function MessageItem2({ msg, liveTools, liveParts,
               msg.tokenIn != null ? `  ↑${msg.tokenIn.toLocaleString()}` : ""
             ]
           }, undefined, true, undefined, this)
+        }, undefined, false, undefined, this)
+      ]
+    }, undefined, true, undefined, this);
+  }
+  if (msg.isNotificationSummary && msg.notificationPayloads && msg.notificationPayloads.length > 0) {
+    const headerText2 = `· bg-tasks completed `;
+    const separatorLen2 = Math.max(2, termWidth - headerText2.length - 2);
+    return /* @__PURE__ */ jsxDEV22("box", {
+      flexDirection: "column",
+      width: "100%",
+      children: [
+        /* @__PURE__ */ jsxDEV22("box", {
+          marginBottom: 1,
+          children: /* @__PURE__ */ jsxDEV22("text", {
+            children: [
+              /* @__PURE__ */ jsxDEV22("span", {
+                fg: C.warn,
+                children: /* @__PURE__ */ jsxDEV22("strong", {
+                  children: headerText2
+                }, undefined, false, undefined, this)
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ jsxDEV22("span", {
+                fg: C.warn,
+                children: "─".repeat(separatorLen2)
+              }, undefined, false, undefined, this)
+            ]
+          }, undefined, true, undefined, this)
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV22("box", {
+          flexDirection: "column",
+          backgroundColor: C.toolPendingBg,
+          paddingLeft: 1,
+          children: msg.notificationPayloads.map((p, i) => /* @__PURE__ */ jsxDEV22("box", {
+            children: /* @__PURE__ */ jsxDEV22(NotificationPayloadBlock, {
+              payload: p
+            }, undefined, false, undefined, this)
+          }, `notif-${p.taskId || i}`, false, undefined, this))
+        }, undefined, false, undefined, this),
+        msg.createdAt != null && /* @__PURE__ */ jsxDEV22("box", {
+          marginTop: 1,
+          children: /* @__PURE__ */ jsxDEV22("text", {
+            fg: C.dim,
+            children: formatTime(msg.createdAt)
+          }, undefined, false, undefined, this)
         }, undefined, false, undefined, this)
       ]
     }, undefined, true, undefined, this);
@@ -4674,7 +4750,7 @@ function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }) {
         const notifDesc = notificationContextRef.current.description;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last?.role === "assistant")
+          if (last?.role === "assistant" && !isNotif)
             return prev;
           return [...prev, {
             id: nextMsgId(),
@@ -4726,6 +4802,9 @@ function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }) {
             return [{ id: nextMsgId(), role: "assistant", parts: normalizedParts, ...meta, ...notifMeta }];
           if (last.role !== "assistant")
             return [...prev, { id: nextMsgId(), role: "assistant", parts: normalizedParts, ...meta, ...notifMeta }];
+          if (isNotif && !last.isNotification) {
+            return [...prev, { id: nextMsgId(), role: "assistant", parts: normalizedParts, ...meta, ...notifMeta }];
+          }
           const copy = [...prev];
           let finalParts = mergeMessageParts([...last.parts, ...normalizedParts]);
           const pending = toolInvocationsRef.current;
@@ -4843,6 +4922,16 @@ function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }) {
       },
       clearNotificationContext() {
         notificationContextRef.current = { active: false };
+      },
+      setNotificationPayloads(payloads) {
+        setMessages((prev) => [...prev, {
+          id: nextMsgId(),
+          role: "assistant",
+          parts: [],
+          isNotificationSummary: true,
+          notificationPayloads: payloads,
+          createdAt: Date.now()
+        }]);
       },
       updateBackgroundTaskCount(delta) {
         setBackgroundTaskCount((prev) => Math.max(0, prev + delta));
@@ -6209,6 +6298,11 @@ class ConsolePlatform extends PlatformAdapter {
         } else if (status === "chunk-heartbeat") {
           this.appHandle?.advanceBackgroundTaskSpinner();
         }
+      }
+    });
+    this.backend.on("notification:payloads", (sid, payloads) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.setNotificationPayloads(payloads);
       }
     });
     this.backend.on("auto-compact", (sid, summaryText) => {
