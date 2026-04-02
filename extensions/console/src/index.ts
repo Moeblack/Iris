@@ -345,6 +345,14 @@ export class ConsolePlatform extends PlatformAdapter {
       }
     });
 
+    // 监听 notification:payloads 获取异步子代理通知的结构化内容
+    // （在 turn:start 之前触发，供前端渲染折叠通知区块）
+    this.backend.on('notification:payloads' as any, (sid: string, payloads: any[]) => {
+      if (sid === this.sessionId) {
+        this.appHandle?.setNotificationPayloads(payloads);
+      }
+    });
+
     this.backend.on('auto-compact', (sid: string, summaryText: string) => {
       if (sid === this.sessionId) {
         const fullText = `[Context Summary]\n\n${summaryText}`;

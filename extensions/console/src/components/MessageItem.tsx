@@ -59,6 +59,15 @@ export type MessagePart =
   | { type: 'thought'; text: string; durationMs?: number }
   | { type: 'tool_use'; tools: ToolInvocation[] };
 
+/** 异步子代理通知的结构化内容 */
+export interface NotificationPayload {
+  taskId: string;
+  status: string;
+  description: string;
+  result?: string;
+  error?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -70,6 +79,10 @@ export interface ChatMessage {
   isNotification?: boolean;
   /** notification turn 的任务描述（供显示） */
   notificationDescription?: string;
+  /** 独立的通知汇总消息（不含 LLM 回复，仅展示各子代理的完成状态） */
+  isNotificationSummary?: boolean;
+  /** notification turn 的结构化通知内容（供渲染折叠区块） */
+  notificationPayloads?: NotificationPayload[];
   parts: MessagePart[];
   tokenIn?: number;
   cachedTokenIn?: number;
@@ -126,6 +139,33 @@ function groupParts(parts: MessagePart[]): RenderGroup[] {
   return groups;
 }
 
+/**
+ * 单个子代理通知的紧凑展示区块。
+ * 显示状态图标、任务描述和结果预览（首行截断）。
+ * TODO: 后续可添加键盘交互实现展开/折叠切换，完整展示结果文本。
+ */
+function NotificationPayloadBlock({ payload }: { payload: NotificationPayload }) {
+  const icon = payload.status === 'completed' ? '\u2713'
+    : payload.status === 'failed' ? '\u2717'
+    : '\u2298';
+  const iconColor = payload.status === 'completed' ? C.accent : C.error;
+
+  // 取结果/错误的首行作为预览文本
+  const content = payload.result || payload.error || '';
+  const firstLine = content.split('\n').filter(l => l.trim())[0] || '';
+  const preview = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine;
+
+  return (
+    <box>
+      <text>
+        <span fg={iconColor}>{icon}</span>
+        <span fg={C.text}> {payload.description}</span>
+        {preview ? <span fg={C.dim}>{' \u2014 '}{preview}</span> : null}
+      </text>
+    </box>
+  );
+}
+
 export const MessageItem = React.memo(function MessageItem(
   { msg, liveTools, liveParts, isStreaming, modelName }: MessageItemProps
 ) {
@@ -156,6 +196,35 @@ export const MessageItem = React.memo(function MessageItem(
             {msg.tokenIn != null ? `  \u2191${msg.tokenIn.toLocaleString()}` : ''}
           </text>
         </box>
+      </box>
+    );
+  }
+
+  // 通知汇总消息：独立展示各子代理完成状态，不含 LLM 回复内容。
+  // 在主 LLM 收到 notification 并开始回复之前就已渲染到聊天区。
+  if (msg.isNotificationSummary && msg.notificationPayloads && msg.notificationPayloads.length > 0) {
+    const headerText = `\u00b7 bg-tasks completed `;
+    const separatorLen = Math.max(2, termWidth - headerText.length - 2);
+    return (
+      <box flexDirection="column" width="100%">
+        <box marginBottom={1}>
+          <text>
+            <span fg={C.warn}><strong>{headerText}</strong></span>
+            <span fg={C.warn}>{'\u2500'.repeat(separatorLen)}</span>
+          </text>
+        </box>
+        <box flexDirection="column" backgroundColor={C.toolPendingBg} paddingLeft={1}>
+          {msg.notificationPayloads.map((p: NotificationPayload, i: number) => (
+            <box key={`notif-${p.taskId || i}`}>
+              <NotificationPayloadBlock payload={p} />
+            </box>
+          ))}
+        </box>
+        {msg.createdAt != null && (
+          <box marginTop={1}>
+            <text fg={C.dim}>{formatTime(msg.createdAt)}</text>
+          </box>
+        )}
       </box>
     );
   }

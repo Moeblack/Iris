@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { ToolInvocation, UsageMetadata } from '@irises/extension-sdk';
-import type { ChatMessage, MessagePart } from '../components/MessageItem';
+import type { ChatMessage, MessagePart, NotificationPayload } from '../components/MessageItem';
 import type { RetryInfo } from '../components/GeneratingTimer';
 import type { MessageMeta } from '../app-types';
 import {
@@ -44,6 +44,8 @@ export interface AppHandle {
   removeBackgroundTaskTokens(taskId: string): void;
   /** 收到 chunk 心跳时推进 spinner 帧（只有数据真正流动时 spinner 才转） */
   advanceBackgroundTaskSpinner(): void;
+  /** 设置通知的结构化内容（由平台在 notification:payloads 事件中调用） */
+  setNotificationPayloads(payloads: NotificationPayload[]): void;
   /**
    * 从消息队列中出队下一条消息。
    * 由 App 组件通过 drainCallbackRef 注册实际实现。
@@ -157,7 +159,9 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
         const notifDesc = notificationContextRef.current.description;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last?.role === 'assistant') return prev;
+          // 普通 turn 内的多轮 tool loop 复用同一条 assistant 消息（stream:start 在同一 turn 内多次调用）。
+          // notification turn 必须创建新消息，不能合并到上一轮用户 turn 的 assistant 消息中。
+          if (last?.role === 'assistant' && !isNotif) return prev;
           return [...prev, {
             id: nextMsgId(),
             role: 'assistant',
@@ -203,6 +207,11 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
           }
           if (prev.length === 0) return [{ id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta, ...notifMeta }];
           if (last.role !== 'assistant') return [...prev, { id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta, ...notifMeta }];
+          // notification turn 不应合并到上一轮非-notification 的 assistant 消息中，
+          // 否则通知内容会混入普通回复，NotificationPayloadBlock 也不会渲染。
+          if (isNotif && !last.isNotification) {
+            return [...prev, { id: nextMsgId(), role: 'assistant', parts: normalizedParts, ...meta, ...notifMeta }];
+          }
           const copy = [...prev];
           let finalParts = mergeMessageParts([...last.parts, ...normalizedParts]);
           // 流式阶段 setToolInvocations 可能因 parts 为空而被跳过，
@@ -324,6 +333,14 @@ export function useAppHandle({ onReady, undoRedoRef, drainCallbackRef }: UseAppH
       },
       clearNotificationContext() {
         notificationContextRef.current = { active: false };
+      },
+      setNotificationPayloads(payloads: NotificationPayload[]) {
+        // 立即插入一条独立的通知汇总消息到聊天区，不等待主 LLM 回复。
+        // 这样用户可以在主 LLM 开始响应之前就看到各子代理的完成状态。
+        setMessages((prev) => [...prev, {
+          id: nextMsgId(), role: 'assistant', parts: [],
+          isNotificationSummary: true, notificationPayloads: payloads, createdAt: Date.now(),
+        }]);
       },
       updateBackgroundTaskCount(delta: number) {
         // delta > 0 表示新增后台任务（registered），delta < 0 表示任务结束（completed/failed/killed）

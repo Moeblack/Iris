@@ -94,6 +94,15 @@ export interface BackendConfig {
   asyncSubAgents?: boolean;
 }
 
+/** 异步子代理通知的结构化数据（由 Backend 解析 <task-notification> XML 后生成） */
+export interface NotificationPayload {
+  taskId: string;
+  status: string;
+  description: string;
+  result?: string;
+  error?: string;
+}
+
 export interface BackendEvents {
   /** 非流式最终回复 */
   'response': (sessionId: string, text: string) => void;
@@ -142,4 +151,6 @@ export interface BackendEvents {
    * status 取值：'registered' | 'completed' | 'failed' | 'killed'
    */
   'agent:notification': (sessionId: string, taskId: string, status: string, summary: string) => void;
+  /** 异步子代理通知的结构化内容（在 turn:start 之前 emit，供前端展示折叠通知区块） */
+  'notification:payloads': (sessionId: string, payloads: NotificationPayload[]) => void;
 }

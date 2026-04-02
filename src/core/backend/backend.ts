@@ -52,7 +52,7 @@ import { TurnLock } from '../turn-lock';
 import { StreamingToolExecutor } from '../../tools/streaming-executor';
 import type { AgentTaskRegistry, AgentTask } from '../agent-task-registry';
 
-import type { BackendConfig, ImageInput, DocumentInput, UndoScope, UndoOperationResult, RedoOperationResult } from './types';
+import type { BackendConfig, ImageInput, DocumentInput, UndoScope, UndoOperationResult, RedoOperationResult, NotificationPayload } from './types';
 import { buildStoredUserParts } from './media';
 import { prepareHistoryForLLM, preparePartsForLLM } from './history';
 import { callLLMStream } from './stream';
@@ -64,6 +64,28 @@ const logger = createLogger('Backend');
 // ============ 会话上下文（用于在异步调用链中传递 sessionId） ============
 
 export const sessionContext = new AsyncLocalStorage<string>();
+
+/**
+ * 解析合并后的 <task-notification> XML 文本为结构化数据。
+ *
+ * 子代理完成后生成的 XML 格式固定（由 sub-agent/index.ts 的 buildNotificationXML 产生），
+ * 使用简单的正则提取各字段，无需引入 XML 解析器。
+ */
+function parseNotificationPayloads(mergedText: string): NotificationPayload[] {
+  const payloads: NotificationPayload[] = [];
+  const blockRegex = /<task-notification>([\s\S]*?)<\/task-notification>/g;
+  let match;
+  while ((match = blockRegex.exec(mergedText)) !== null) {
+    const xml = match[1];
+    const taskId = xml.match(/<task-id>([\s\S]*?)<\/task-id>/)?.[1]?.trim() ?? '';
+    const status = xml.match(/<status>([\s\S]*?)<\/status>/)?.[1]?.trim() ?? '';
+    const description = xml.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim() ?? '';
+    const result = xml.match(/<result>([\s\S]*?)<\/result>/)?.[1]?.trim();
+    const error = xml.match(/<error>([\s\S]*?)<\/error>/)?.[1]?.trim();
+    payloads.push({ taskId, status, description, result, error });
+  }
+  return payloads;
+}
 
 // ============ Backend 类 ============
 
@@ -842,6 +864,15 @@ export class Backend extends EventEmitter {
         this.pendingNotifications.delete(msg.sessionId);
         mergedNotificationText = pending.join('\n\n');
         logger.info(`合并 ${pending.length} 条通知，统一处理: session=${msg.sessionId}`);
+      }
+
+      // 将通知 XML 解析为结构化数据，发送给前端渲染折叠区块。
+      // 在 turn:start 之前 emit，确保前端先收到 payloads 再开始 stream 渲染。
+      if (mergedNotificationText) {
+        const payloads = parseNotificationPayloads(mergedNotificationText);
+        if (payloads.length > 0) {
+          this.emit('notification:payloads', msg.sessionId, payloads);
+        }
       }
 
       // 通知平台层本轮 turn 的类型（chat / task-notification），
