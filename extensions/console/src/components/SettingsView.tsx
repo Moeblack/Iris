@@ -585,11 +585,15 @@ export function SettingsView({ initialSection = 'general', onBack, onLoad, onSav
         setEditor(null);
         setEditorValue('');
         setStatus('已取消编辑', 'warning');
+        key.preventDefault();
       }
       // 修复：OpenTUI 中 Enter 键的 key.name 可能是 'return'（取决于终端键盘协议），
       // 与 use-app-keyboard.ts / InputBar.tsx 保持一致，同时兼容两种名称。
       if (key.name === 'enter' || key.name === 'return') {
         submitEditor();
+        // 阻止事件继续传播到 <input> 的 renderable handler，
+        // 避免 <input>.submit() 再次触发 onChange 覆盖 editorValue。
+        key.preventDefault();
       }
       return;
     }

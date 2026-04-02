@@ -9,7 +9,7 @@ class PlatformAdapter {
     return this.constructor.name;
   }
 }
-// ../../packages/extension-sdk/dist/plugin.js
+// ../../packages/extension-sdk/dist/logger.js
 var LogLevel;
 (function(LogLevel2) {
   LogLevel2[LogLevel2["DEBUG"] = 0] = "DEBUG";
@@ -18,6 +18,7 @@ var LogLevel;
   LogLevel2[LogLevel2["ERROR"] = 3] = "ERROR";
   LogLevel2[LogLevel2["SILENT"] = 4] = "SILENT";
 })(LogLevel || (LogLevel = {}));
+var _logLevel = LogLevel.INFO;
 // src/index.ts
 import { estimateTokenCount } from "tokenx";
 
@@ -4206,9 +4207,11 @@ function SettingsView({ initialSection = "general", onBack, onLoad, onSave }) {
         setEditor(null);
         setEditorValue("");
         setStatus("已取消编辑", "warning");
+        key.preventDefault();
       }
       if (key.name === "enter" || key.name === "return") {
         submitEditor();
+        key.preventDefault();
       }
       return;
     }
