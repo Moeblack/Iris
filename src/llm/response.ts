@@ -62,11 +62,13 @@ async function* parseSSE(response: Response): AsyncGenerator<SSEChunk> {
   const decoder = new TextDecoder();
   let buffer = '';
   let currentEvent: string | undefined;
+  let chunksRead = 0;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      chunksRead++;
 
       buffer += decoder.decode(value, { stream: true });
 
@@ -97,6 +99,12 @@ async function* parseSSE(response: Response): AsyncGenerator<SSEChunk> {
         yield { event: currentEvent, data };
       }
     }
+  } catch (err) {
+    // 为连接中断错误补充上下文（已接收块数帮助判断是建连失败还是中途断开）
+    const msg = err instanceof Error ? err.message : String(err);
+    const wrapped = new Error(`SSE 流读取中断（已接收 ${chunksRead} 个数据块）: ${msg}`);
+    (wrapped as any).cause = err;
+    throw wrapped;
   } finally {
     reader.releaseLock();
   }

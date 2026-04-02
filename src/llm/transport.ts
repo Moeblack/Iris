@@ -88,12 +88,22 @@ export async function sendRequest(
     timestamp = logRequest(loggingDir, { url, method: 'POST', headers, body });
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: combineSignals(signal, effectiveTimeout),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: combineSignals(signal, effectiveTimeout),
+    });
+  } catch (err) {
+    // fetch 本身失败（网络错误、DNS 失败、超时等）—— 记录到响应日志
+    if (loggingDir && timestamp) {
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      try { logResponse(loggingDir, timestamp, `--- FETCH ERROR ---\n${detail}`, stream); } catch { /* ignore */ }
+    }
+    throw err;
+  }
 
   if (!loggingDir || !timestamp) return res;
 
@@ -110,7 +120,8 @@ export async function sendRequest(
 /**
  * 包装流式 Response，透传所有数据的同时收集完整响应用于日志记录。
  *
- * 使用 TransformStream 作为透明代理，流结束时将收集到的全部 SSE 文本写入文件。
+ * 使用 ReadableStream 代理原始 body，收集完整 SSE 文本用于日志记录。
+ * 与 TransformStream 不同，此方式能在流异常中断时也将已收集的部分数据（及错误信息）写入日志。
  */
 function wrapStreamForLogging(res: Response, timestamp: string, logsDir: string): Response {
   const body = res.body;
@@ -118,18 +129,47 @@ function wrapStreamForLogging(res: Response, timestamp: string, logsDir: string)
 
   const decoder = new TextDecoder();
   const chunks: string[] = [];
+  const reader = body.getReader();
 
-  const transform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      chunks.push(decoder.decode(chunk, { stream: true }));
-      controller.enqueue(chunk);
+  // 预先提取响应头，出错时写入日志供排查
+  const headerLines: string[] = [];
+  res.headers.forEach((value, key) => { headerLines.push(`${key}: ${value}`); });
+
+  function saveLog(error?: unknown) {
+    try {
+      let content = chunks.join('');
+      if (error) {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        content += `\n\n--- STREAM ERROR ---\n${detail}\n`
+          + `\n--- RESPONSE HEADERS ---\n${headerLines.join('\n')}\n`;
+      }
+      logResponse(logsDir, timestamp, content, true);
+    } catch { /* ignore */ }
+  }
+
+  const wrapped = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          saveLog();
+          controller.close();
+          return;
+        }
+        chunks.push(decoder.decode(value, { stream: true }));
+        controller.enqueue(value);
+      } catch (err) {
+        saveLog(err);
+        controller.error(err);
+      }
     },
-    flush() {
-      try { logResponse(logsDir, timestamp, chunks.join(''), true); } catch { /* ignore */ }
+    cancel(reason) {
+      saveLog(reason ?? new Error('Stream cancelled'));
+      return reader.cancel(reason);
     },
   });
 
-  return new Response(body.pipeThrough(transform), {
+  return new Response(wrapped, {
     status: res.status,
     statusText: res.statusText,
     headers: res.headers,
