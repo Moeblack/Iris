@@ -91,41 +91,21 @@ function extractShellCommand(call: FunctionCallPart): string {
 /**
  * 判断工具调用是否应该自动批准。
  *
- * 对 shell 工具支持 allowPatterns / denyPatterns 细粒度控制：
- *   优先级：denyPatterns > allowPatterns > autoApprove
+ * 对 shell 工具：调度器不弹 Y/N，安全判定全部交给 handler 内层处理。
+ *   - 内层黑名单 → handler 硬拦截
+ *   - 内层白名单 → handler 直接放行
+ *   - unknown → handler 走 AI 分类器 / fallback / force 对话确认
  *
- *   1. 命令匹配 denyPatterns  → 必须手动确认（即使 autoApprove: true）
- *   2. 命令匹配 allowPatterns → 自动执行（即使 autoApprove: false）
- *   3. 都不匹配              → 回退到 autoApprove 布尔值
- *
- * 注意：showApprovalView（二类审批 / diff 预览）不影响此函数。
- * 即使 autoApprove: true 跳过了一类审批，调度器仍会在执行前独立检查二类审批。
+ * 对非 shell 工具：行为不变，按 autoApprove 配置决定。
  */
 function shouldAutoApprove(
   call: FunctionCallPart,
   policy: ToolPolicyConfig,
 ): boolean {
-  const hasPatterns = policy.allowPatterns?.length || policy.denyPatterns?.length;
+  // shell 工具：一律自动批准，安全判定完全交给 handler 内层
+  if (call.functionCall.name === 'shell') return true;
 
-  // 非 shell 工具 或 未配置任何模式 → 直接用 autoApprove
-  if (call.functionCall.name !== 'shell' || !hasPatterns) {
-    return policy.autoApprove;
-  }
-
-  const command = extractShellCommand(call);
-  if (!command) return policy.autoApprove;
-
-  // 1. denyPatterns 最高优先
-  if (policy.denyPatterns?.length && matchesAnyPattern(command, policy.denyPatterns)) {
-    return false;
-  }
-
-  // 2. allowPatterns 次之
-  if (policy.allowPatterns?.length && matchesAnyPattern(command, policy.allowPatterns)) {
-    return true;
-  }
-
-  // 3. 兜底
+  // 非 shell 工具：按 autoApprove 配置决定
   return policy.autoApprove;
 }
 
@@ -322,6 +302,18 @@ async function executeSingle(
   const globalSkipConfirmation = toolsConfig.autoApproveAll === true || toolsConfig.autoApproveConfirmation === true;
   const globalSkipDiff = toolsConfig.autoApproveAll === true || toolsConfig.autoApproveDiff === true;
 
+  // 追踪用户是否通过交互审批明确批准了此次调用（用于 shell 安全分类器覆盖）
+  let userExplicitlyApproved = false;
+
+  // 对非 shell 工具：autoApprove/allowPatterns 跳过审批时，标记为用户已批准。
+  // 对 shell 工具：不在这里设置。shell 的安全判定完全交给 handler 内层，
+  // approvedByUser 只在用户真正通过 Y/N 弹窗确认时设置（denyPatterns 匹配后按 Y）。
+  if (toolName !== 'shell') {
+    if (globalSkipConfirmation || shouldAutoApprove(call, effectivePolicy)) {
+      userExplicitlyApproved = true;
+    }
+  }
+
   if (toolState && invocationId) {
     // ── 一类审批：autoApprove 控制，底部 Y/N ──
     if (!globalSkipConfirmation && !shouldAutoApprove(call, effectivePolicy)) {
@@ -336,7 +328,8 @@ async function executeSingle(
           },
         };
       }
-      // approved → 状态已被 approveTool 转为 executing
+      // approved → 用户明确批准，状态已被 approveTool 转为 executing
+      userExplicitlyApproved = true;
     }
 
     // ── 二类审批：showApprovalView 控制，diff 预览视图（执行前） ──
@@ -434,6 +427,7 @@ async function executeSingle(
     const executionContext: ToolExecutionContext = {
       reportProgress: progressCtx?.reportProgress,
       signal,
+      approvedByUser: userExplicitlyApproved || undefined,
     };
 
   const execStart = Date.now();

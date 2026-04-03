@@ -146,6 +146,25 @@ export interface ToolPolicyConfig {
 
   allowPatterns?: string[];
   denyPatterns?: string[];
+
+  /**
+   * Shell 工具专用：AI 安全分类器配置。
+   * 当命令不在静态白名单/黑名单中时，调用 LLM 判断命令安全性。
+   */
+  classifier?: {
+    /** 是否启用 AI 分类器（false 时非白名单命令走 fallbackPolicy） */
+    enabled: boolean;
+    /** 分类器使用的模型名称（不填则跟随当前活跃模型） */
+    model?: string;
+    /** 置信度阈值（0.0~1.0），低于此值视为"不确定"，默认 0.8 */
+    confidenceThreshold?: number;
+    /** 分类器不确定时的兜底策略，默认 'deny' */
+    fallbackPolicy?: 'deny' | 'allow';
+    /** 分类器调用超时（ms），默认 8000 */
+    timeout?: number;
+    /** 安装命令后是否自动评估新工具的安全子命令并加入运行时白名单（默认跟随 enabled） */
+    autoLearn?: boolean;
+  };
 }
 
 export interface ToolsConfig {

@@ -22,7 +22,7 @@ import { ToolStateManager } from './tools/state';
 import { setToolLimits } from './tools/tool-limits';
 import { readFile } from './tools/internal/read_file';
 import { searchInFiles } from './tools/internal/search_in_files';
-import { shell } from './tools/internal/shell';
+import { createShellTool } from './tools/internal/shell';
 import { findFiles } from './tools/internal/find_files';
 import { applyDiff } from './tools/internal/apply_diff';
 import { writeFile } from './tools/internal/write_file';
@@ -158,7 +158,19 @@ export async function bootstrap(options?: BootstrapOptions): Promise<BootstrapRe
   // ---- 3. 注册工具 ----
   const tools = new ToolRegistry();
   setToolLimits(config.tools.limits);
-  tools.registerAll([readFile, writeFile, applyDiff, searchInFiles, findFiles, shell, listFiles, deleteFile, createDirectory, insertCode, deleteCode]);
+
+  // Shell 工具：注入 LLM 路由器以启用 AI 安全分类器 + 动态学习
+  const shellClassifierConfig = (config.tools.permissions.shell as any)?.classifier;
+  const shellTool = createShellTool({
+    getRouter: () => router,
+    classifierConfig: shellClassifierConfig,
+    // 动态学习（autoLearn）所需的额外依赖：
+    // 学习 sub-agent 需要 ToolRegistry（获取 shell 工具）和 ToolPolicies（自动批准 --help）
+    tools,
+    getToolPolicies: () => config.tools.permissions,
+    retryOnError: config.system.retryOnError,
+  });
+  tools.registerAll([readFile, writeFile, applyDiff, searchInFiles, findFiles, shellTool, listFiles, deleteFile, createDirectory, insertCode, deleteCode]);
 
   // ---- 3.1 连接 MCP 服务器 ----
   let mcpManager: MCPManager | undefined;

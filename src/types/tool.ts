@@ -78,6 +78,14 @@ export interface ToolStateChangeEvent {
  */
 export interface ToolExecutionContext {
   /**
+   * 用户是否已手动批准此次工具调用。
+   *
+   * 由 scheduler 在用户通过 TUI Y/N 确认、或命令匹配 allowPatterns 时设置为 true。
+   * shell 工具检测到此标记后，跳过 AI 分类器判定（仅保留 deny 黑名单硬拦截），
+   * 尊重用户的明确授权意图。
+   */
+  approvedByUser?: boolean;
+  /**
    * 上报实时进度。调用后进度数据会写入 ToolInvocation.progress，
    * 通过 tool:update 事件推送到前端渲染。
    * scheduler 内部做节流处理，handler 可高频调用而不会造成渲染压力。

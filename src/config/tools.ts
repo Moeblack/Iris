@@ -35,7 +35,35 @@ function normalizeToolPolicy(raw: unknown): ToolPolicyConfig | undefined {
   const deny = parsePatternList(record.denyPatterns);
   if (deny) policy.denyPatterns = deny;
 
+  // Shell 专用：AI 安全分类器
+  const classifier = parseClassifierConfig(record.classifier);
+  if (classifier) policy.classifier = classifier;
+
   return policy;
+}
+
+function parseClassifierConfig(raw: unknown): ToolPolicyConfig['classifier'] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+
+  // enabled 必须显式为 true 才启用
+  if (obj.enabled !== true) return undefined;
+
+  const config: NonNullable<ToolPolicyConfig['classifier']> = { enabled: true };
+  if (typeof obj.model === 'string' && obj.model.trim()) config.model = obj.model.trim();
+  if (typeof obj.confidenceThreshold === 'number' && obj.confidenceThreshold > 0 && obj.confidenceThreshold <= 1) {
+    config.confidenceThreshold = obj.confidenceThreshold;
+  }
+  if (obj.fallbackPolicy === 'deny' || obj.fallbackPolicy === 'allow') {
+    config.fallbackPolicy = obj.fallbackPolicy;
+  }
+  if (typeof obj.timeout === 'number' && obj.timeout > 0) {
+    config.timeout = obj.timeout;
+  }
+  if (typeof obj.autoLearn === 'boolean') {
+    config.autoLearn = obj.autoLearn;
+  }
+  return config;
 }
 
 function parsePositiveNumber(value: unknown): number | undefined {
