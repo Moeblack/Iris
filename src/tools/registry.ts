@@ -11,6 +11,15 @@ import { createLogger } from '../logger';
 
 const logger = createLogger('ToolRegistry');
 
+/**
+ * 命令工具名称归一化：shell (Windows) / bash (Linux/macOS) 自动映射为当前平台实际工具名。
+ * 用户在配置 allowedTools / excludedTools / mode include/exclude 时无需关心平台差异。
+ */
+const PLATFORM_COMMAND_TOOL = process.platform === 'win32' ? 'shell' : 'bash';
+function normalizeToolName(name: string): string {
+  return (name === 'shell' || name === 'bash') ? PLATFORM_COMMAND_TOOL : name;
+}
+
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
 
@@ -69,19 +78,19 @@ export class ToolRegistry {
     return this.tools.size;
   }
 
-  /** 创建仅包含指定工具的子注册表 */
+  /** 创建仅包含指定工具的子注册表（shell/bash 自动适配当前平台） */
   createSubset(names: string[]): ToolRegistry {
     const sub = new ToolRegistry();
     for (const name of names) {
-      const tool = this.tools.get(name);
+      const tool = this.tools.get(normalizeToolName(name));
       if (tool) sub.register(tool);
     }
     return sub;
   }
 
-  /** 创建排除指定工具的子注册表 */
+  /** 创建排除指定工具的子注册表（shell/bash 自动适配当前平台） */
   createFiltered(excludeNames: string[]): ToolRegistry {
-    const exclude = new Set(excludeNames);
+    const exclude = new Set(excludeNames.map(normalizeToolName));
     const sub = new ToolRegistry();
     for (const [name, tool] of this.tools) {
       if (!exclude.has(name)) sub.register(tool);

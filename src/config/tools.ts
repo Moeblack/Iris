@@ -91,6 +91,8 @@ function parseLimitsSection(raw: unknown): Partial<ToolLimitsConfig> | undefined
   if (pick(obj.list_files)) limits.list_files = pick(obj.list_files) as any;
   if (pick(obj.find_files)) limits.find_files = pick(obj.find_files) as any;
   if (pick(obj.shell)) limits.shell = pick(obj.shell) as any;
+  // bash 工具复用 shell 的 limits（两者共享同一套限制配置）
+  if (pick(obj.bash)) limits.shell = { ...(limits.shell ?? {}), ...pick(obj.bash) } as any;
   return Object.keys(limits).length > 0 ? limits : undefined;
 }
 

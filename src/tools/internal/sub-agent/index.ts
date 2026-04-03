@@ -253,6 +253,7 @@ ${typeDescriptions}
       const shouldRunAsync = asyncCapable && (runInBackground || (typeConfig as any).background === true);
 
       // 构建子工具集（同步/异步共用）
+      // shell/bash 名称归一化已在 ToolRegistry.createSubset/createFiltered 中处理
       let subTools: ToolRegistry;
       if (typeConfig.allowedTools) {
         subTools = deps.tools.createSubset(typeConfig.allowedTools);

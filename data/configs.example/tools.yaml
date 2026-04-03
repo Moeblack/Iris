@@ -29,7 +29,9 @@ limits:
   find_files:
     maxResults: 500                # 每个 pattern 的最大结果数
 
-  # ── shell ──
+  # ── 命令执行工具 ──
+  # Windows 使用 shell (PowerShell)，Linux/macOS 使用 bash
+  # 两者共享同一套 limits，配置 shell 或 bash 均可
   shell:
     defaultTimeout: 30000          # 默认超时 (毫秒)
     maxOutputChars: 50000          # stdout/stderr 各自的最大字符数
@@ -97,10 +99,13 @@ create_directory:
   autoApprove: false
 
 # ─────────────────────────────────────────────────────────────
-# Shell 工具配置
+# 命令执行工具配置
 # ─────────────────────────────────────────────────────────────
 #
-# 除了 autoApprove 开关外，shell 工具还支持细粒度的命令模式匹配：
+# Windows 使用 shell (PowerShell)，Linux/macOS 使用 bash。
+# 根据你的平台配置对应的 key（shell 或 bash），两者支持完全相同的选项。
+#
+# 除了 autoApprove 开关外，命令工具还支持细粒度的命令模式匹配：
 #
 #   allowPatterns — 白名单：匹配的命令自动执行（即使 autoApprove: false）
 #   denyPatterns  — 黑名单：匹配的命令必须确认（即使 autoApprove: true）
@@ -212,6 +217,12 @@ shell:
     # 包管理器写操作
     # - "npm install*"            # 安装依赖
     # - "npm publish*"            # 发布包
+
+# Linux/macOS 用户：将上方 shell: 改为 bash:，配置选项完全相同
+# bash:
+#   autoApprove: false
+#   # classifier:
+#   #   enabled: true
 
 sub_agent:
   autoApprove: false

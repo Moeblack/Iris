@@ -102,8 +102,8 @@ function shouldAutoApprove(
   call: FunctionCallPart,
   policy: ToolPolicyConfig,
 ): boolean {
-  // shell 工具：一律自动批准，安全判定完全交给 handler 内层
-  if (call.functionCall.name === 'shell') return true;
+  // shell / bash 工具：一律自动批准，安全判定完全交给 handler 内层
+  if (call.functionCall.name === 'shell' || call.functionCall.name === 'bash') return true;
 
   // 非 shell 工具：按 autoApprove 配置决定
   return policy.autoApprove;
@@ -365,7 +365,7 @@ async function executeSingle(
   // 对非 shell 工具：autoApprove/allowPatterns 跳过审批时，标记为用户已批准。
   // 对 shell 工具：不在这里设置。shell 的安全判定完全交给 handler 内层，
   // approvedByUser 只在用户真正通过 Y/N 弹窗确认时设置（denyPatterns 匹配后按 Y）。
-  if (toolName !== 'shell') {
+  if (toolName !== 'shell' && toolName !== 'bash') {
     if (autoApproved) {
       userExplicitlyApproved = true;
     }

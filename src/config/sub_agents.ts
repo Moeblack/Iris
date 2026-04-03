@@ -23,7 +23,7 @@
  *     explore:
  *       enabled: true
  *       description: "只读搜索和阅读文件"
- *       allowedTools: [read_file, shell]
+ *       allowedTools: [read_file, shell, bash]
  *       stream: true
  *       parallel: true
  *       maxToolRounds: 200

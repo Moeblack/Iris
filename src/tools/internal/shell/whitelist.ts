@@ -16,35 +16,35 @@ import type { CommandSafetyConfig, StaticClassification } from './types';
  * 无论任何上下文都拒绝执行的危险模式。
  * 匹配到就立即返回 deny，不进后续判定。
  */
-const DENY_PATTERNS: RegExp[] = [
+const DENY_PATTERNS: { pattern: RegExp; reason: string }[] = [
   // ---- 系统破坏 ----
-  /\bformat\b.*\b[a-zA-Z]:/i,                     // format C:
-  /\b(shutdown|restart-computer|stop-computer)\b/i,// 系统关机/重启
+  { pattern: /\bformat\b.*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },
+  { pattern: /\b(shutdown|restart-computer|stop-computer)\b/i, reason: '禁止系统关机/重启' },
 
   // ---- 下载执行组合（远程代码执行） ----
-  /\bcurl\b.*\|\s*(ba)?sh\b/i,                     // curl | bash
-  /\bwget\b.*\|\s*(ba)?sh\b/i,                     // wget | bash
-  /Invoke-WebRequest\b.*\|.*Invoke-Expression\b/i, // iwr | iex
-  /\biwr\b.*\|.*\biex\b/i,                         // 别名形式
-  /\b(certutil|bitsadmin)\b.*(-urlcache|-download)/i, // Windows 特有下载器
+  { pattern: /\bcurl\b.*\|\s*(ba)?sh\b/i, reason: '禁止 curl | bash 远程代码执行' },
+  { pattern: /\bwget\b.*\|\s*(ba)?sh\b/i, reason: '禁止 wget | bash 远程代码执行' },
+  { pattern: /Invoke-WebRequest\b.*\|.*Invoke-Expression\b/i, reason: '禁止 iwr | iex 远程代码执行' },
+  { pattern: /\biwr\b.*\|.*\biex\b/i, reason: '禁止 iwr | iex 远程代码执行' },
+  { pattern: /\b(certutil|bitsadmin)\b.*(-urlcache|-download)/i, reason: '禁止使用 certutil/bitsadmin 下载执行' },
 
   // ---- 动态代码执行 ----
-  /\bInvoke-Expression\b/i,                        // iex（等同 eval）
-  /\biex\b/i,                                      // iex 别名
-  /\beval\b/i,                                     // eval
+  { pattern: /\bInvoke-Expression\b/i, reason: '禁止 Invoke-Expression 动态代码执行' },
+  { pattern: /\biex\b/i, reason: '禁止 iex 动态代码执行' },
+  { pattern: /\beval\b/i, reason: '禁止 eval 动态代码执行' },
 
   // ---- 注册表高危操作 ----
-  /\bRemove-Item\b.*\bHKLM:/i,                     // 删除注册表机器根键
-  /\breg\s+delete\b.*\bHKLM/i,                     // reg delete HKLM
+  { pattern: /\bRemove-Item\b.*\bHKLM:/i, reason: '禁止删除注册表机器根键' },
+  { pattern: /\breg\s+delete\b.*\bHKLM/i, reason: '禁止删除注册表机器根键' },
 
   // ---- 危险删除 ----
-  /\bRemove-Item\b.*-Recurse.*-Force.*[\\\/]\s*$/i, // Remove-Item -Recurse -Force \
-  /\brd\s+\/s\s+\/q\s+[a-zA-Z]:\\/i,              // rd /s /q C:\
-  /\bdel\s+\/[fFsS].*[a-zA-Z]:\\\**/i,            // del /f C:\*
+  { pattern: /\bRemove-Item\b.*-Recurse.*-Force.*[\\\/](\s|$)/i, reason: '禁止递归强制删除根路径' },
+  { pattern: /\brd\s+\/s\s+\/q\s+[a-zA-Z]:\\/i, reason: '禁止 rd /s /q 删除整盘' },
+  { pattern: /\bdel\s+\/[fFsS].*[a-zA-Z]:\\\**/i, reason: '禁止 del /f 删除整盘文件' },
 
   // ---- 进程注入/提权 ----
-  /Start-Process\b.*-Verb\s+RunAs/i,               // UAC 提权
-  /\bInvoke-WmiMethod\b.*Win32_Process.*Create/i,  // WMI 进程创建
+  { pattern: /Start-Process\b.*-Verb\s+RunAs/i, reason: '禁止 UAC 提权' },
+  { pattern: /\bInvoke-WmiMethod\b.*Win32_Process.*Create/i, reason: '禁止 WMI 远程进程创建' },
 ];
 
 // ============ 第二层：安全白名单 ============
@@ -325,12 +325,17 @@ const SAFE_COMMANDS: Record<string, CommandSafetyConfig> = {
       'remote', 'config', 'rev-parse', 'ls-files', 'ls-tree',
       'blame', 'shortlog', 'describe', 'stash list', 'reflog',
       'rev-list', 'cat-file', 'name-rev', 'for-each-ref',
+      'merge-base', 'grep', 'stash show', 'worktree list',
     ],
   },
   'gh': {
     safeSubcommands: [
-      'issue list', 'issue view', 'pr list', 'pr view', 'pr checks',
-      'repo view', 'status', 'run list', 'run view',
+      'issue list', 'issue view', 'issue status',
+      'pr list', 'pr view', 'pr checks', 'pr diff', 'pr status',
+      'repo view', 'status',
+      'run list', 'run view',
+      'auth status',
+      'release list', 'release view',
     ],
   },
   'npm': {
@@ -414,6 +419,71 @@ const SAFE_COMMANDS: Record<string, CommandSafetyConfig> = {
   'gcloud': {
     safeSubcommands: ['--version', 'info', 'config list', 'auth list', 'projects list', 'compute instances list'],
   },
+
+  // =========================================================================
+  // 跨平台开发工具（Docker/容器/构建/脚��）
+  // =========================================================================
+  'docker-compose': {
+    safeSubcommands: ['ps', 'config', 'images', 'version'],
+  },
+  'podman': {
+    safeSubcommands: [
+      'ps', 'images', 'info', 'version', 'inspect',
+      'logs', 'stats', 'top', 'port',
+    ],
+  },
+  'pip3': {
+    safeSubcommands: ['list', 'show', 'freeze', 'check'],
+  },
+  'python3': {
+    safeSubcommands: ['--version', '-c "import sys; print(sys.version)"'],
+  },
+  'make': {
+    safeSubcommands: ['--version', '-n', '--dry-run', '-p'],
+  },
+  'cmake': {
+    safeSubcommands: ['--version', '--help'],
+  },
+  'curl': {
+    // curl 只读（GET 请求）安全；POST/PUT/DELETE/上传 等为写操作
+    // curl | bash 已在 DENY_PATTERNS 中拦截
+    isDangerous: (args) => args.some(a => /^(-X|--request|-d|--data|--data-raw|--data-binary|-F|--form|--upload-file|-T|--delete)$/.test(a)),
+  },
+
+  // =========================================================================
+  // 跨平台搜索/数据处理工具
+  // =========================================================================
+  'jq': { safe: true },
+  'yq': { safe: true },
+  'rg': { safe: true },           // ripgrep
+  'fd': { safe: true },           // fd-find
+  'ag': { safe: true },           // the silver searcher
+  'ack': { safe: true },
+  'diff': { safe: true },
+
+  // =========================================================================
+  // Unix 工具（Windows 上通过 Git for Windows 可用）
+  // =========================================================================
+  'head': { safe: true },
+  'tail': { safe: true },
+  'wc': { safe: true },
+  'grep': { safe: true },
+  'awk': { safe: true },
+  'sed': {
+    isDangerous: (args) => args.some(a => /^-[a-zA-Z]*i/.test(a)),
+  },
+  // 'cat' 已在 PowerShell 别名区定义（→ Get-Content），不重复
+  'base64': { safe: true },
+  'stat': { safe: true },
+  'uniq': { safe: true },
+  'cut': { safe: true },
+  'tr': { safe: true },
+  'printf': { safe: true },
+  'which': { safe: true },
+  'seq': { safe: true },
+  'sleep': { safe: true },
+  'test': { safe: true },
+  'du': { safe: true },
 };
 
 // ============ 第三层：运行时动态白名单 ============
@@ -463,7 +533,7 @@ export function classifyCommand(command: string): StaticClassification {
   if (!trimmed) return 'deny';
 
   // 1. 检查绝对禁止模式
-  for (const pattern of DENY_PATTERNS) {
+  for (const { pattern } of DENY_PATTERNS) {
     if (pattern.test(trimmed)) return 'deny';
   }
 
@@ -558,9 +628,9 @@ function classifySingleStatement(stmt: string): StaticClassification {
  */
 export function getDenyReason(command: string): string | null {
   const trimmed = command.trim();
-  for (const pattern of DENY_PATTERNS) {
+  for (const { pattern, reason } of DENY_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return `命令匹配危险模式: ${pattern.source}`;
+      return reason;
     }
   }
   return null;

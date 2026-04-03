@@ -44,7 +44,8 @@ types:
       - search_in_files
       - find_files
       - list_files
-      - shell
+      - shell              # Windows; Linux/macOS 会自动映射为 bash
+      - bash               # Linux/macOS; Windows 会自动映射为 shell
     stream: true
     parallel: true
     # modelName: gpt4o_mini

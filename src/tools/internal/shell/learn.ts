@@ -1,8 +1,8 @@
 /**
- * Shell 白名单动态学习
+ * 命令白名单动态学习（shell / bash 共用）
  *
- * 当 shell 执行安装命令（pip install、npm install -g 等）成功后，
- * 启动一个轻量 sub-agent（带 shell 工具的 ToolLoop），让 LLM 自己
+ * 当 shell/bash 执行安装命令（pip install、npm install -g、apt install 等）成功后，
+ * 启动一个轻量 sub-agent（带对应工具的 ToolLoop），让 LLM 自己
  * 执行 --help 探测新安装的 CLI 工具，分析哪些子命令是只读安全的，
  * 将结果写入运行时白名单。
  *
@@ -131,6 +131,17 @@ function extractGenericInstallPackages(fullCommand: string): string[] {
   return extractPositionalPackages(args);
 }
 
+/**
+ * apt/apt-get/brew/yum/dnf/pacman/zypper/apk install 包名提取。
+ */
+function extractLinuxPkgManagerPackages(fullCommand: string): string[] {
+  const args = fullCommand.replace(
+    /^(sudo\s+)?(apt-get|apt|brew|yum|dnf|zypper\s+install|apk\s+add|pacman\s+-S)\s+(install\s+)?/i,
+    '',
+  );
+  return extractPositionalPackages(args);
+}
+
 /** 安装命令模式列表 */
 const INSTALL_PATTERNS: Array<{
   regex: RegExp;
@@ -148,6 +159,15 @@ const INSTALL_PATTERNS: Array<{
   { regex: /^scoop\s+install\b/i, manager: 'scoop', extractor: extractGenericInstallPackages },
   { regex: /^(choco|chocolatey)\s+install\b/i, manager: 'choco', extractor: extractGenericInstallPackages },
   { regex: /^winget\s+install\b/i, manager: 'winget', extractor: extractGenericInstallPackages },
+
+  // Linux 包管理器
+  { regex: /^(sudo\s+)?apt(-get)?\s+install\b/i, manager: 'apt', extractor: extractLinuxPkgManagerPackages },
+  { regex: /^brew\s+install\b/i, manager: 'brew', extractor: extractLinuxPkgManagerPackages },
+  { regex: /^(sudo\s+)?pacman\s+-S\b/i, manager: 'pacman', extractor: extractLinuxPkgManagerPackages },
+  { regex: /^(sudo\s+)?yum\s+install\b/i, manager: 'yum', extractor: extractLinuxPkgManagerPackages },
+  { regex: /^(sudo\s+)?dnf\s+install\b/i, manager: 'dnf', extractor: extractLinuxPkgManagerPackages },
+  { regex: /^(sudo\s+)?zypper\s+install\b/i, manager: 'zypper', extractor: extractLinuxPkgManagerPackages },
+  { regex: /^(sudo\s+)?apk\s+add\b/i, manager: 'apk', extractor: extractLinuxPkgManagerPackages },
 ];
 
 /**
@@ -183,11 +203,17 @@ export interface LearnedCommand {
  * 关键设计：LLM 拥有 shell 工具，可以自己执行 --help 获取真实帮助文本，
  * 然后基于真实输出做安全分类，而不是凭训练知识猜测。
  */
-const LEARN_SYSTEM_PROMPT = `You are a CLI tool safety analyzer for Windows.
-You have access to a shell tool. Your job is to discover what CLI commands a newly installed package provides, and determine which subcommands are READ-ONLY safe.
+/**
+ * 构建学习系统提示词。
+ * toolName 参数用于指定 sub-agent 使用的工具名（shell 或 bash）。
+ */
+function buildLearnPrompt(toolName: string): string {
+  const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
+  return `You are a CLI tool safety analyzer for ${platform}.
+You have access to a ${toolName} tool. Your job is to discover what CLI commands a newly installed package provides, and determine which subcommands are READ-ONLY safe.
 
 Workflow:
-1. For each package, try running "<package-name> --help" or "<package-name> -h" using the shell tool
+1. For each package, try running "<package-name> --help" or "<package-name> -h" using the ${toolName} tool
 2. If the package name doesn't match the command name (common!), try common variations:
    - The package name itself (e.g. "httpie" → try "httpie --help")
    - Known aliases (e.g. "httpie" installs "http" command)
@@ -217,11 +243,12 @@ If the package does not install any CLI commands (e.g. it's a library), return:
 \`\`\`
 
 IMPORTANT:
-- Use the shell tool to run --help. Do NOT guess from memory.
+- Use the ${toolName} tool to run --help. Do NOT guess from memory.
 - The command name often differs from the package name (e.g. package "httpie" → command "http")
 - Some packages install multiple commands
-- Keep shell commands simple: just "<cmd> --help" or "<cmd> <subcmd> --help"
+- Keep commands simple: just "<cmd> --help" or "<cmd> <subcmd> --help"
 - Do NOT run any destructive commands. Only --help, -h, help, --version.`;
+}
 
 /**
  * 从 ToolLoop 的最终文本输出中提取 JSON 结果。
@@ -283,6 +310,7 @@ async function runLearnAgent(
   packages: string[],
   packageManager: string,
   deps: ShellToolDeps,
+  toolName: string = 'shell',
 ): Promise<LearnedCommand[]> {
   const router = deps.getRouter();
 
@@ -290,7 +318,7 @@ async function runLearnAgent(
   // 学习 agent 只需要 shell 来执行 --help，不需要其他工具
   let subTools: ToolRegistry;
   if (deps.tools) {
-    subTools = deps.tools.createSubset(['shell']);
+    subTools = deps.tools.createSubset([toolName]);
   } else {
     // fallback: 没有 tools 注入时无法运行 ToolLoop
     logger.warn('未注入 ToolRegistry，无法启动学习 agent');
@@ -298,13 +326,13 @@ async function runLearnAgent(
   }
 
   const prompt = new PromptAssembler();
-  prompt.setSystemPrompt(LEARN_SYSTEM_PROMPT);
+  prompt.setSystemPrompt(buildLearnPrompt(toolName));
 
-  // 学习 agent 的 shell 调用必须自动批准（只执行 --help），
-  // 不管用户主配置中 shell 的 autoApprove 是什么。
+  // 学习 agent 的工具调用必须自动批准（只执行 --help），
+  // 不管用户主配置中的 autoApprove 是什么。
   const learnPermissions = {
     ...(deps.getToolPolicies?.() ?? {}),
-    shell: { autoApprove: true },  // 强制覆盖
+    [toolName]: { autoApprove: true },  // 强制覆盖
   };
 
   const loop = new ToolLoop(subTools, prompt, {
@@ -322,7 +350,7 @@ async function runLearnAgent(
   const userPrompt = `I just installed these packages via ${packageManager}:
 ${packages.map(p => `- ${p}`).join('\n')}
 
-Please use the shell tool to run --help for each package and analyze which subcommands are read-only safe. Remember: the command name may differ from the package name.`;
+Please use the ${toolName} tool to run --help for each package and analyze which subcommands are read-only safe. Remember: the command name may differ from the package name.`;
 
   const result = await loop.run(
     [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -347,14 +375,16 @@ Please use the shell tool to run --help for each package and analyze which subco
  * → LLM 自己执行 --help 探测 → 分析安全子命令 → 写入运行时白名单。
  * 设计为 fire-and-forget，所有错误静默处理。
  *
- * @param command  执行的 shell 命令
- * @param stdout   命令的标准输出（可用于辅助判断）
- * @param deps     依赖注入
+ * @param command   执行的命令
+ * @param stdout    命令的标准输出（可用于辅助判断）
+ * @param deps      依赖注入
+ * @param toolName  当前工具名（'shell' 或 'bash'），用于学习 sub-agent
  */
 export async function tryLearnFromInstall(
   command: string,
   stdout: string,
   deps: ShellToolDeps,
+  toolName: string = 'shell',
 ): Promise<void> {
   try {
     // 1. 检测是否是安装命令
@@ -368,6 +398,7 @@ export async function tryLearnFromInstall(
       detection.packages,
       detection.packageManager,
       deps,
+      toolName,
     );
 
     if (learned.length === 0) {

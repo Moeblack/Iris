@@ -114,6 +114,8 @@ create_directory:
   autoApprove: false
 shell:
   autoApprove: false
+bash:
+  autoApprove: false
 sub_agent:
   autoApprove: false
 # autoApproveAll: true
@@ -151,6 +153,7 @@ types:
       - find_files
       - list_files
       - shell
+      - bash
     stream: true
     parallel: true
     # background: false

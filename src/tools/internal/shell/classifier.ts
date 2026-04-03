@@ -1,8 +1,9 @@
 /**
- * Shell 命令 AI 分类器
+ * 命令 AI 安全分类器（shell / bash 共用）
  *
  * 当白名单无法判定时，调用 LLM 判断命令是否安全。
  * 复用 Iris 现有的 LLMRouter，不引入新依赖。
+ * 通过 platform 参数区分 Windows (PowerShell) 和 Unix (bash) 场景。
  */
 
 import type { LLMRouter } from '../../../llm/router';
@@ -26,13 +27,39 @@ const DEFAULTS: Required<Omit<ShellClassifierConfig, 'model'>> = {
  *
  * 不给工具、不要多话，只返回结构化 JSON。
  * 用英文以确保所有模型都能理解。
- */
-/**
- * 构建分类器系统提示词。
- * shell 名称动态填入，与实际使用的 PowerShell 版本一致。
+ * 根据 platform 自动切换 Windows / Unix 的危险模式列表。
  */
 function buildClassifierPrompt(shell: string, cwd: string): string {
-  return `You are a shell command safety classifier for Windows systems.
+  const isWindows = process.platform === 'win32';
+  const isMac = process.platform === 'darwin';
+  const platform = isWindows ? 'Windows' : isMac ? 'macOS' : 'Linux';
+
+  const dangerousPatterns = isWindows
+    ? `- Pipe combinations hiding dangerous ops (e.g. download + execute)
+- File redirects (> >>) overwrite files
+- rm/del/Remove-Item delete files
+- Package install commands (npm install, pip install) modify the project
+- chmod/chown/icacls modify permissions
+- git push/commit/reset --hard modify repository state
+- Registry modifications (reg add/delete, Set-ItemProperty on HKLM:)
+- Service modifications (sc config, Set-Service)
+- Invoke-Expression / iex (eval equivalent)
+- Start-Process with -Verb RunAs (privilege escalation)`
+    : `- Pipe combinations hiding dangerous ops (e.g. curl | bash, download + execute)
+- File redirects (> >>) overwrite files
+- rm/rmdir delete files or directories
+- Package install commands (apt install, pip install, npm install) modify the system
+- chmod/chown modify permissions or ownership
+- git push/commit/reset --hard modify repository state
+- sudo/su privilege escalation
+- eval/exec/source dynamic code execution
+- crontab modification
+- systemctl/service daemon management
+- iptables/ufw firewall modification
+- dd disk operations, mkfs filesystem formatting
+- Fork bombs and resource exhaustion`;
+
+  return `You are a shell command safety classifier for ${platform} systems.
 Your ONLY job is to decide whether a command is safe to execute.
 
 Reply with ONLY a JSON object, no other text:
@@ -43,19 +70,10 @@ Safety criteria:
 - safe=false: Command modifies/deletes files, installs/uninstalls software, makes network requests that could be harmful, executes scripts, modifies system configuration
 
 Dangerous patterns to watch for:
-- Pipe combinations hiding dangerous ops (e.g. download + execute)
-- File redirects (> >>) overwrite files
-- rm/del/Remove-Item delete files
-- Package install commands (npm install, pip install) modify the project
-- chmod/chown/icacls modify permissions
-- git push/commit/reset --hard modify repository state
-- Registry modifications (reg add/delete, Set-ItemProperty on HKLM:)
-- Service modifications (sc config, Set-Service)
-- Invoke-Expression / iex (eval equivalent)
-- Start-Process with -Verb RunAs (privilege escalation)
+${dangerousPatterns}
 
 Context:
-- Platform: Windows
+- Platform: ${platform}
 - Shell: ${shell}
 - Working directory: ${cwd}`;
 }
