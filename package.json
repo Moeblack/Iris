@@ -21,6 +21,7 @@
     "start:bun": "bun script/run.ts",
     "dev:bun": "bun script/run.ts",
     "setup:extensions": "tsx script/install-extension-deps.ts",
+    "build:extensions": "tsx script/build-extensions.ts",
     "setup": "npm install --legacy-peer-deps && npm run setup:extensions -- --frozen-lockfile && cd extensions/web/web-ui && npm install",
     "test": "npm run sync:extensions && npm run setup:extensions -- --frozen-lockfile && vitest run"
   },

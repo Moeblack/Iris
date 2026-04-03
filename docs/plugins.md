@@ -55,13 +55,19 @@ import { PairingGuard, PairingStore, type PairingConfig } from '@irises/extensio
 ## 文件结构
 
 ```
-src/plugins/
-├── types.ts                类型定义（IrisPlugin / PluginContext / IrisAPI / PluginHook 等）
+src/extension/
+├── types.ts                宿主内部类型（LoadedPlugin / 拦截器等，不导出给扩展）
 ├── context.ts              PluginContextImpl（每个插件获得的独立上下文实例）
 ├── manager.ts              PluginManager（发现、加载、激活、停用）
 ├── patch.ts                通用 monkey-patch 工具（patchMethod / patchPrototype）
 ├── event-bus.ts            插件间共享事件总线
 ├── prebootstrap-context.ts PreBootstrap 阶段上下文
+├── registry.ts             BootstrapExtensionRegistry（Provider / 平台注册表）
+├── catalog.ts              远程 extension 目录（下载列表）
+├── installer.ts            extension 安装与依赖管理
+├── command.ts              CLI 子命令（iris ext install / uninstall）
+├── dependencies.ts         extension 依赖检测与安装（detectPackageManager / installDependencies）
+├── utils.ts                extension 工具函数
 └── index.ts                统一导出
 ```
 
@@ -222,12 +228,17 @@ interface PreBootstrapContext {
   mutateConfig(mutator: (config: AppConfig) => void): void;
   registerLLMProvider(name: string, factory: LLMProviderFactory): void;
   registerStorageProvider(type: string, factory: StorageFactory): void;
-  registerMemoryProvider(type: string, factory: MemoryFactory): void;  // @deprecated — memory 已迁移为独立插件
+  registerMemoryProvider(type: string, factory: MemoryFactory): void;  // @deprecated — memory 已迁移为独立扩展插件
   registerOCRProvider(name: string, factory: OCRFactory): void;
   registerPlatform(name: string, factory: PlatformFactory): void;
   getExtensions(): BootstrapExtensionRegistry;
   getLogger(tag?: string): PluginLogger;
   getPluginConfig<T = Record<string, unknown>>(): T | undefined;
+
+  // 配置文件管理
+  getConfigDir(): string;                                    // 获取宿主配置目录的绝对路径
+  ensureConfigFile(filename: string, content: string): boolean; // 确保配置文件存在，不存在则创建
+  readConfigSection(section: string): Record<string, unknown> | undefined; // 从宿主配置目录读取指定 YAML 配置段
 }
 ```
 
@@ -351,6 +362,17 @@ interface PluginContext {
   getConfig(): Readonly<AppConfig>;
   getLogger(tag?: string): PluginLogger;
   getPluginConfig<T = Record<string, unknown>>(): T | undefined;
+
+  // 配置文件管理（与 PreBootstrapContext 共享的便捷方法）
+  getExtensionRootDir(): string | undefined;  // 获取当前扩展的根目录绝对路径（内联插件返回 undefined）
+  getConfigDir(): string;                     // 获取宿主配置目录的绝对路径
+  ensureConfigFile(filename: string, content: string): boolean; // 确保配置文件存在
+  readConfigSection(section: string): Record<string, unknown> | undefined; // 读取指定 YAML 配置段
+
+  // 插件间协作
+  getEventBus(): PluginEventBusLike;          // 获取插件间事件总线
+  getPluginManager(): PluginManagerLike;      // 获取插件管理器（查询其他插件）
+  setHookPriority(hookName: string, priority: number): boolean; // 更新已注册 Hook 的优先级
 }
 ```
 
@@ -423,7 +445,7 @@ ctx.wrapTool('write_file', async (original, args) => {
 
 ## 钩子系统
 
-通过 `ctx.addHook()` 注册。当前提供八个钩子点。每个 hook 可带 `priority`，数值越大越先执行：
+通过 `ctx.addHook()` 注册。当前提供九个钩子点。每个 hook 可带 `priority`，数值越大越先执行：
 
 ### onBeforeChat
 
@@ -550,6 +572,25 @@ ctx.addHook({
 });
 ```
 
+### onConfigReload
+
+配置文件变化时调用（热重载）。插件可在此钩子中读取新配置并重新初始化资源。
+
+```typescript
+ctx.addHook({
+  name: 'my-plugin-config-reload',
+  async onConfigReload({ config, rawMergedConfig }) {
+    // config 是重载后的最新 AppConfig
+    // rawMergedConfig 是合并后的原始配置数据（未经类型解析）
+    const mySection = rawMergedConfig['my-plugin'] as Record<string, unknown> | undefined;
+    if (mySection) {
+      applyNewConfig(mySection);
+    }
+  },
+});
+```
+
+
 ---
 
 ## 提示词操作
@@ -607,8 +648,8 @@ interface IrisAPI {
   prompt: PromptAssembler;   // 提示词装配器
   config: AppConfig;         // 当前应用配置（只读）
   mcpManager?: MCPManager;   // MCP 管理器
-  computerEnv?: Computer;    // Computer Use 环境实例
   ocrService?: OCRProvider;  // OCR 服务
+  media?: MediaServiceLike;  // 媒体处理服务：图片缩放、文档提取、Office→PDF
   extensions: BootstrapExtensionRegistry; // 启动扩展注册表
 
   // --- 高级能力 ---
@@ -617,8 +658,36 @@ interface IrisAPI {
   patchMethod: typeof patchMethod;    // 安全替换对象方法
   patchPrototype: typeof patchPrototype; // 安全替换类原型方法
   registerWebRoute?: (method, path, handler) => void; // 向 Web 平台注册路由；若 Web 尚未创建会先排队，绑定后自动注册
+  registerWebPanel?: (panel: WebPanelDefinition) => void; // 向 Web 平台注册扩展面板页面
   registerConsoleSettingsTab?: (tab: ConsoleSettingsTabDefinition) => void; // 向 Console Settings 注册插件 Tab
   getConsoleSettingsTabs?: () => ConsoleSettingsTabDefinition[];            // 获取所有已注册的 Console Settings Tab
+
+  // --- 配置与环境 ---
+  configManager?: ConfigManagerLike;   // 配置读写与热重载
+  toolPreviewUtils?: ToolPreviewUtilsLike; // 工具预览辅助（路径解析、diff 解析等）
+  isCompiledBinary?: boolean;          // 当前是否运行在编译后的二进制中
+  projectRoot?: string;                // 项目根目录
+  dataDir?: string;                    // 运行时数据目录（~/.iris/ 或自定义）
+
+  // --- 日志 ---
+  setLogLevel?(level: LogLevel): void;
+  getLogLevel?(): LogLevel;
+
+  // --- 模型能力查询 ---
+  fetchAvailableModels?(config: { provider, apiKey, baseUrl? }): Promise<ModelCatalogResult>;
+  supportsVision?(modelName?: string): boolean;
+  supportsNativePDF?(modelName?: string): boolean;
+  supportsNativeOffice?(modelName?: string): boolean;
+  isDocumentMimeType?(mimeType: string): boolean;
+
+  // --- Agent 管理 ---
+  listAgents?(): AgentDefinition[];
+  agentManager?: AgentManagerLike;     // Agent CRUD 操作
+  extensionManager?: ExtensionManagerLike; // 扩展安装/启用/禁用/删除
+  agentTaskRegistry?: unknown;         // 异步子代理任务注册表（供 cron 等后台插件使用）
+
+  // --- ToolLoop 工厂 ---
+  createToolLoop?(options: { tools, systemPrompt, maxRounds? }): ToolLoopRunnerLike; // 创建 ToolLoop 实例供插件后台执行 LLM+工具循环
 }
 ```
 

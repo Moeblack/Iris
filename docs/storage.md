@@ -10,6 +10,7 @@
 ```
 src/storage/
 ├── base.ts              StorageProvider 抽象基类
+├── attachment.ts        工具附件存储辅助（截图等二进制附件的读写）
 ├── json-file/index.ts   JSON 文件存储实现
 └── sqlite/index.ts      SQLite 存储实现
 ```

@@ -11,6 +11,10 @@ src/tools/
 ├── registry.ts          ToolRegistry 工具注册中心
 ├── state.ts             ToolStateManager 工具状态跟踪
 ├── scheduler.ts         工具调度（并行/串行）
+├── streaming-executor.ts 流式工具执行器（流式模式下边流式输出边执行已完成的工具调用）
+├── coerce-args.ts       工具参数强制类型转换（LLM 输出的参数可能类型不精确）
+├── validate-args.ts     工具参数校验（按 schema 检查必填参数和类型）
+├── tool-limits.ts       工具执行限制（如最大文件数、最大内容长度等）
 ├── utils.ts             公共工具函数（路径安全校验等）
 └── internal/
     ├── read_file.ts     读取文件内容（带行号）
@@ -136,6 +140,25 @@ function resolveProjectPath(inputPath: string): string;
 1. 创建 `src/tools/internal/工具名.ts`
 2. 导出 `ToolDefinition` 对象
 3. 在 `src/index.ts` 中 import 并调用 `tools.register()` 或 `tools.registerAll()`
+
+
+## 参数处理
+
+### coerce-args
+
+LLM 输出的工具参数可能类型不精确（例如数字传成了字符串，布尔值传成 `"true"`）。`coerce-args.ts` 会根据工具声明的 `parameters` schema 自动进行类型转换，确保 handler 收到的参数类型正确。
+
+### validate-args
+
+在工具执行前根据 schema 检查必填参数是否存在、类型是否匹配。不符合时返回错误描述而不是抛异常，让 LLM 有机会修正参数重试。
+
+### streaming-executor
+
+流式模式下，LLM 可能在一次输出中包含多个工具调用。`StreamingExecutor` 会在流式传输过程中，一旦某个工具的参数已完整接收，就立即开始执行，不必等整个流式输出结束，从而降低总体延迟。
+
+### tool-limits
+
+定义工具执行的硬限制，例如单次 `read_file` 的最大文件数、单次返回内容的最大长度等。超出限制时返回提示信息而不是尝试处理全部内容。
 
 ## 注意事项
 
