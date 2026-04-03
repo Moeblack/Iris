@@ -10,8 +10,22 @@
 
 ```
 src/core/
-├── backend.ts       Backend 核心服务
-└── tool-loop.ts     ToolLoop 工具循环（纯计算，无 I/O）
+├── backend/
+│   ├── backend.ts       Backend 核心服务（主类）
+│   ├── types.ts         BackendConfig / BackendEvents / UndoOperationResult 等类型定义
+│   ├── history.ts       会话历史相关逻辑（读取、追加、截断）
+│   ├── media.ts         媒体处理（图片/文档输入预处理）
+│   ├── plugins.ts       插件钩子调用（onBeforeChat / onAfterChat 等）
+│   ├── stream.ts        流式输出处理
+│   ├── undo-redo.ts     撤销/重做逻辑
+│   └── index.ts         统一导出
+├── tool-loop.ts         ToolLoop 工具循环（纯计算，无 I/O）
+├── summarizer.ts        自动上下文压缩（auto-compact）
+├── turn-lock.ts         回合级并发锁（per-session）
+├── message-queue.ts     消息排队（AI 繁忙时暂存用户新消息）
+├── history-sanitizer.ts 历史修复（清理孤立 functionCall/functionResponse）
+├── agent-task-registry.ts 异步子代理任务注册表
+└── platform-registry.ts 平台注册表（内置 + extension 注册）
 ```
 
 相关入口文件：
@@ -44,7 +58,14 @@ interface BootstrapResult {
   mcpManager: MCPManager | undefined;
   setMCPManager: (manager?: MCPManager) => void;
   getMCPManager: () => MCPManager | undefined;
-  agentName?: string;     // 多 Agent 模式下的 Agent 标识
+  agentName?: string;         // 多 Agent 模式下的 Agent 标识
+  initWarnings: string[];     // 初始化过程中的警告信息
+  pluginManager: PluginManager | undefined; // 插件管理器
+  extensions: BootstrapExtensionRegistry;   // 启动扩展注册表
+  platformRegistry: PlatformRegistry;       // 平台注册表（内置 + 插件注册）
+  eventBus: PluginEventBus;                 // 插件间共享事件总线
+  bindWebRouteRegistration: (register) => void; // 绑定 Web 路由注册
+  irisAPI?: Record<string, unknown>;        // 完整 IrisAPI（供平台 factory 注入）
 }
 ```
 
@@ -85,11 +106,19 @@ new Backend(
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `maxToolRounds` | `number` | `200` | 工具执行最大轮次 |
+| `retryOnError` | `boolean` | `false` | LLM 调用出错时是否自动重试 |
+| `maxRetries` | `number` | `3` | 最大重试次数 |
+| `toolsConfig` | `object` | — | 工具执行策略配置（autoApprove 等） |
 | `stream` | `boolean` | `false` | 是否启用流式输出 |
-| `subAgentGuidance` | `string` | — | 子代理协调指导文本 |
 | `defaultMode` | `string` | — | 默认模式名称 |
 | `currentLLMConfig` | `LLMConfig` | — | 当前活动模型配置（用于 vision 能力判定） |
 | `ocrService` | `OCRService` | — | OCR 服务（当主模型不支持 vision 时回退使用） |
+| `summaryModelName` | `string` | — | 用于自动压缩的模型名称（不指定时使用当前模型） |
+| `summaryConfig` | `object` | — | 自动上下文压缩配置 |
+| `skills` | `SkillConfig[]` | `[]` | 技能列表（skill 文件路径和描述） |
+| `configDir` | `string` | — | 配置目录路径 |
+| `rememberPlatformModel` | `boolean` | `false` | 平台是否记住上次使用的模型 |
+| `asyncSubAgents` | `boolean` | `false` | 是否启用异步子代理 |
 
 ---
 
@@ -173,8 +202,15 @@ Backend 继承自 `EventEmitter`，平台层通过监听事件接收结果。
 | `tool:update` | `(sessionId, invocations[])` | 工具状态变更（创建、执行中、完成等） |
 | `error` | `(sessionId, errorMessage)` | 消息处理过程中出错 |
 | `usage` | `(sessionId, usage: UsageMetadata)` | 每轮 LLM 调用后的 Token 用量 |
+| `retry` | `(sessionId, attempt, maxRetries, error)` | LLM 调用重试 |
+| `user:token` | `(sessionId, tokenCount)` | 用户输入的估算 token 数 |
 | `done` | `(sessionId, durationMs: number)` | 当前用户回合完成（统一耗时来源） |
+| `turn:start` | `(sessionId, turnId)` | 回合开始 |
 | `assistant:content` | `(sessionId, content: Content)` | 一轮模型输出完成后的完整结构化内容 |
+| `auto-compact` | `(sessionId, summaryText)` | 自动上下文压缩完成 |
+| `attachments` | `(sessionId, attachments)` | 工具执行产生的附件（截图等） |
+| `agent:notification` | `(sessionId, text)` | 异步子代理任务完成通知 |
+| `notification:payloads` | `(sessionId, payloads)` | 解析后的结构化通知数据 |
 
 ### 事件时序示例
 

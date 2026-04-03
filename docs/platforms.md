@@ -23,10 +23,10 @@ Backend 不知道具体平台存在。
 
 ```text
 src/platforms/
-├── (cli.ts)             # CLI headless 模式（非平台适配器，直接调用 Backend）
 ├── base.ts              # PlatformAdapter 抽象基类
-├── console/             # 控制台 TUI（OpenTUI / React）
-└── web/                 # Web GUI（HTTP + SSE + Vue）
+extensions/
+├── console/             # 控制台 TUI（OpenTUI / React）— 内嵌 extension
+├── web/                 # Web GUI（HTTP + SSE + Vue）— 内嵌 extension
 extensions/
 ├── lark/                # 飞书平台 extension（内嵌）
 ├── telegram/            # Telegram 平台 extension（内嵌）
@@ -35,6 +35,8 @@ extensions/
 ├── wxwork/              # 企业微信平台 extension（可选安装）
 └── weixin/              # 微信平台 extension（可选安装）
 ```
+
+> CLI headless 模式（`src/cli.ts`）不是平台适配器，直接调用 Backend。
 
 ---
 

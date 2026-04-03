@@ -44,12 +44,32 @@ bun run dev            # 启动（直接使用 Bun 运行时）
 |------|------|
 | `npm run dev` | 开发启动；默认走 Node.js，遇到 console 平台时自动切到 Bun |
 | `bun run dev` | 开发启动；直接走 Bun 运行时 |
+| `npm run setup` | 安装宿主依赖 + 各 extension 依赖 + Web UI |
+| `npm run setup:extensions` | 安装各 extension 目录下的第三方依赖 |
+| `npm run build:extensions` | 一键编译所有 extension 的 TypeScript 源码（先编译 SDK，再逐个编译 extension） |
 | `npm run cli -- -p "prompt"` | CLI 模式；传入 prompt 执行后退出（Node.js + tsx） |
 | `bun src/cli.ts -p "prompt"` | CLI 模式；Bun 运行时 |
 | `npm run build` | TypeScript 编译（排除 console 目录） |
 | `bun run build:compile` | 编译为独立二进制（见下文） |
 | `npm run build:ui` | 构建 Web UI 前端 |
 | `npm run test` | 运行测试（Vitest） |
+
+### Extension 编译
+
+修改了 extension 的 TypeScript 源码后，需要重新编译才能生效：
+
+```bash
+# 编译全部 extension
+npm run build:extensions
+
+# 只编译指定的 extension
+npm run build:extensions -- --filter lark --filter web
+
+# 只编译内嵌 extension（web / lark / console / telegram）
+npm run build:extensions -- --embedded-only
+```
+
+脚本会自动先编译 `@irises/extension-sdk`（因为大部分 extension 依赖它的编译产物），然后逐个在各 extension 目录下执行 `bun run build`。编译产物为 `dist/index.mjs`，提交到仓库中。
 
 ## TypeScript 配置
 

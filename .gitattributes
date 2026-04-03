@@ -1,0 +1,2 @@
+# 强制编译产物使用 LF 行尾，避免 Windows 上重新编译后产生纯行尾差异的假 diff
+extensions/*/dist/*.mjs text eol=lf

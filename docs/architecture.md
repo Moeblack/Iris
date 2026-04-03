@@ -9,23 +9,33 @@
 ```
 src/
 ├── cli.ts          CLI 入口（headless 模式，外部传 prompt 执行）
+├── main.ts         统一入口（编译后的二进制路由到各模式）
 ├── bootstrap.ts    核心初始化（创建 Backend 及所有依赖，供 index.ts 和 cli.ts 共享）
+├── terminal.ts     Terminal TUI 入口（onboard / models / platforms / extension 界面）
 ├── types/          公共类型定义
-├── core/           Backend 核心服务 + ToolLoop 工具循环
+├── core/           Backend 核心服务 + ToolLoop + Summarizer + TurnLock + MessageQueue
 ├── platforms/      用户交互层：接收输入、展示输出
 ├── llm/            LLM API 调用层
 ├── storage/        聊天记录存储层
-├── memory/         长期记忆层
+├── extension/      Extension / Plugin 管理（加载、激活、钩子、事件总线）
 ├── mcp/            MCP 客户端层
 ├── tools/          工具注册层
 ├── prompt/         提示词组装层
 ├── agents/         多 Agent 系统（注册表、路径隔离）
+├── bootstrap/      Bootstrap 辅助模块（extensions.ts）
 ├── modes/          模式系统
 ├── media/          媒体处理（图片缩放、文档提取、Office 转 PDF）
 ├── ocr/            OCR 服务（非 vision 模型的图片回退）
 ├── logger/         日志模块
 ├── paths.ts        路径常量与多 Agent 路径解析
 └── config/         配置加载
+```
+
+```
+extensions/          各平台与功能 extension（lark / telegram / web / console / cron / memory / ...）
+packages/
+└── extension-sdk/   公共 SDK（@irises/extension-sdk），为 extension 和 plugin 提供类型与工具
+terminal/            独立 TUI 应用（onboard / models / platforms / extension 管理界面）
 ```
 
 ## 数据流向
@@ -131,12 +141,14 @@ npm run cli -- -p "分析这个项目"
 | [platforms.md](./platforms.md) | 用户交互层 |
 | [llm.md](./llm.md) | LLM API 调用层 |
 | [storage.md](./storage.md) | 聊天记录存储层 |
-| [memory.md](./memory.md) | 长期记忆系统 |
+| [memory.md](./memory.md) | 长期记忆系统（Memory Extension 插件） |
 | [tools.md](./tools.md) | 工具注册层 |
 | [media.md](./media.md) | 媒体处理层（图片缩放、文档提取） |
 | [prompt.md](./prompt.md) | 提示词组装层 |
 | [logger.md](./logger.md) | 日志模块 |
 | [config.md](./config.md) | 配置模块 |
+| [plugins.md](./plugins.md) | 插件系统（Extension / Plugin API） |
+| [build.md](./build.md) | 构建与分发 |
 | [deploy.md](./deploy.md) | 部署指南 |
 | [agents.md](./agents.md) | 多 Agent 系统 |
 | [computer-use.md](./computer-use.md) | Computer Use（浏览器操控） |
